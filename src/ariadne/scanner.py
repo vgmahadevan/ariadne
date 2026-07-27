@@ -50,15 +50,26 @@ def scan_repository(
         for entry in sorted(os.scandir(directory), key=lambda item: item.name.casefold()):
             path = Path(entry.path)
             rel = _relative(path, context.root)
+            is_symlink = entry.is_symlink()
             is_dir = entry.is_dir(follow_symlinks=False)
+            reported_is_dir = is_dir or (
+                is_symlink and entry.is_dir(follow_symlinks=True)
+            )
             match_path = rel + ("/" if is_dir else "")
             reason = _early_ignore(
-                entry.name, match_path, entry.is_symlink(), is_dir, config, exclude, extra_defaults
+                entry.name,
+                match_path,
+                is_symlink,
+                config,
+                exclude,
+                extra_defaults,
             )
             if reason is None and git_index and config.respect_gitignore and git_index.is_ignored(rel):
                 reason = "gitignore"
             if reason:
-                ignored.append(IgnoredPath(rel, reason, is_directory=is_dir))
+                ignored.append(
+                    IgnoredPath(rel, reason, is_directory=reported_is_dir)
+                )
                 continue
             if is_dir:
                 nodes.append(
@@ -78,7 +89,15 @@ def scan_repository(
             if config.include and not include.match_file(rel):
                 ignored.append(IgnoredPath(rel, "not-included"))
                 continue
-            policy_reason = git_index.policy_reason(rel, config.file_policy) if git_index else None
+            policy_reason = (
+                git_index.policy_reason(
+                    rel,
+                    config.file_policy,
+                    respect_gitignore=config.respect_gitignore,
+                )
+                if git_index
+                else None
+            )
             if policy_reason:
                 ignored.append(IgnoredPath(rel, policy_reason))
                 continue
@@ -111,7 +130,6 @@ def _early_ignore(
     name: str,
     match_path: str,
     is_symlink: bool,
-    is_directory: bool,
     config: RepositoryConfig,
     exclude: PathSpec,
     extra_defaults: PathSpec,
@@ -128,5 +146,5 @@ def _early_ignore(
 
 
 def _relative(path: Path, root: Path) -> str:
-    value = path.resolve().relative_to(root.resolve())
+    value = path.absolute().relative_to(root.resolve())
     return "." if not value.parts else PurePosixPath(*value.parts).as_posix()

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ariadne.git import read_git_index
 from ariadne.models import FilePolicy, RepositoryConfig, RepositoryContext
 from ariadne.scanner import scan_repository
@@ -65,20 +67,32 @@ def test_git_file_policies_and_gitignore(tmp_path: Path) -> None:
         (item.path, item.reason) for item in combined.ignored
     }
 
+    ignoring_gitignore = scan_repository(
+        _context(tmp_path, True),
+        RepositoryConfig(
+            file_policy=FilePolicy.TRACKED_AND_UNTRACKED,
+            respect_gitignore=False,
+        ),
+        index,
+    )
+    assert "ignored.py" in {node.path for node in ignoring_gitignore.nodes}
+
 
 def test_symlink_is_not_followed_when_supported(tmp_path: Path) -> None:
-    target = tmp_path / "target-dir"
+    root = tmp_path / "repository"
+    root.mkdir()
+    target = tmp_path / "outside"
     target.mkdir()
-    link = tmp_path / "linked"
+    link = root / "linked"
     try:
         link.symlink_to(target, target_is_directory=True)
     except OSError:
-        return
+        pytest.skip("directory symlinks are not available")
     result = scan_repository(
-        _context(tmp_path),
+        _context(root),
         RepositoryConfig(file_policy=FilePolicy.ALL_NONIGNORED),
         None,
     )
-    assert ("linked", "symlink") in {
-        (item.path, item.reason) for item in result.ignored
-    }
+    ignored = next(item for item in result.ignored if item.path == "linked")
+    assert ignored.reason == "symlink"
+    assert ignored.is_directory

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -52,14 +52,14 @@ class IgnoredPath:
     is_directory: bool = False
 
 
-@dataclass
+@dataclass(frozen=True)
 class LogicalModule:
     name: str
     physical_path: str
     collapsed_segments: tuple[str, ...] = ()
     languages: tuple[str, ...] = ()
     source_size: int = 0
-    children: list["LogicalModule"] = field(default_factory=list)
+    children: tuple["LogicalModule", ...] = ()
 
 
 @dataclass(frozen=True)

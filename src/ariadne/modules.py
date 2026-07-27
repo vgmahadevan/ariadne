@@ -52,8 +52,8 @@ def discover_modules(
         if parent is not None:
             parent.files.append(node)
 
-    module = _to_module(root, collapse=collapse, is_root=True)
-    return module
+    _prune_empty_directories(root)
+    return _to_module(root, collapse=collapse, is_root=True)
 
 
 def _to_module(directory: _Directory, *, collapse: bool, is_root: bool) -> LogicalModule:
@@ -63,14 +63,14 @@ def _to_module(directory: _Directory, *, collapse: bool, is_root: bool) -> Logic
         while (
             not effective.meaningful_direct_files
             and not effective.files
-            and len(_nonempty_children(effective)) == 1
+            and len(effective.children) == 1
         ):
             collapsed.append(effective.name)
-            effective = _nonempty_children(effective)[0]
+            effective = next(iter(effective.children.values()))
 
     child_modules = [
         _to_module(child, collapse=collapse, is_root=False)
-        for child in _nonempty_children(effective)
+        for child in effective.children.values()
     ]
     child_modules.sort(key=lambda child: child.physical_path)
     direct_languages = {node.language for node in effective.files if node.language}
@@ -84,16 +84,17 @@ def _to_module(directory: _Directory, *, collapse: bool, is_root: bool) -> Logic
         collapsed_segments=tuple(collapsed),
         languages=tuple(sorted(languages)),
         source_size=direct_size + sum(child.source_size for child in child_modules),
-        children=child_modules,
+        children=tuple(child_modules),
     )
 
 
-def _nonempty_children(directory: _Directory) -> list[_Directory]:
-    return [
-        child
-        for _, child in sorted(directory.children.items())
-        if child.files or _nonempty_children(child)
-    ]
+def _prune_empty_directories(directory: _Directory) -> bool:
+    directory.children = {
+        name: child
+        for name, child in sorted(directory.children.items())
+        if _prune_empty_directories(child)
+    }
+    return bool(directory.files or directory.children)
 
 
 def _module_name(directory: _Directory, is_root: bool) -> str:

@@ -29,10 +29,18 @@ class GitIndex:
     def is_ignored(self, path: str) -> bool:
         return any(path == item or path.startswith(item.rstrip("/") + "/") for item in self.ignored)
 
-    def policy_reason(self, path: str, policy: FilePolicy) -> str | None:
+    def policy_reason(
+        self,
+        path: str,
+        policy: FilePolicy,
+        *,
+        respect_gitignore: bool,
+    ) -> str | None:
         if policy is FilePolicy.TRACKED_ONLY and path not in self.tracked:
             return "git-untracked" if not self.is_ignored(path) else "gitignore"
         if policy is FilePolicy.TRACKED_AND_UNTRACKED:
+            if not respect_gitignore:
+                return None
             if path not in self.tracked and path not in self.untracked:
                 return "gitignore" if self.is_ignored(path) else "git-unlisted"
         return None

@@ -63,7 +63,7 @@ Before finishing:
 
 ## Repository Documentation
 
-`ariadne-spec.md` is the authoritative design reference.
+`docs/ariadne-spec.md` is the authoritative design reference.
 
 Consult only the sections relevant to the current milestone instead of treating the entire specification as an implementation prompt.
 
