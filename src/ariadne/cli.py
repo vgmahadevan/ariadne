@@ -5,8 +5,15 @@ import sys
 from pathlib import Path
 
 from .config import ConfigurationError
+from .generation import (
+    GenerationError,
+    PersistenceError,
+    ValidationError,
+    weave_repository,
+)
 from .git import GitError
 from .inspection import inspect_repository
+from .llm import LLMBackend, ModelError
 from .models import FilePolicy
 from .render import render_inspection
 from .repository import RepositoryError
@@ -32,10 +39,34 @@ def build_parser() -> argparse.ArgumentParser:
     policy = inspect_parser.add_mutually_exclusive_group()
     policy.add_argument("--tracked-only", action="store_true")
     policy.add_argument("--include-untracked", action="store_true")
+    weave_parser = subparsers.add_parser(
+        "weave", help="generate documentation for a logical module subtree"
+    )
+    weave_parser.add_argument("path", nargs="?")
+    weave_parser.add_argument("--config", type=Path)
+    weave_parser.add_argument("--root")
+    weave_parser.add_argument("--no-git", action="store_true")
+    weave_parser.add_argument(
+        "--module-only",
+        action="store_true",
+        help="generate only the selected module, not its descendants",
+    )
+    weave_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="allow replacement of human-modified documentation",
+    )
+    weave_policy = weave_parser.add_mutually_exclusive_group()
+    weave_policy.add_argument("--tracked-only", action="store_true")
+    weave_policy.add_argument("--include-untracked", action="store_true")
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    backend: LLMBackend | None = None,
+) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
@@ -47,6 +78,25 @@ def main(argv: list[str] | None = None) -> int:
     elif args.include_untracked:
         selected_policy = FilePolicy.TRACKED_AND_UNTRACKED
     try:
+        if args.command == "weave":
+            generated = weave_repository(
+                path=args.path,
+                config_path=args.config,
+                root=args.root,
+                git_enabled=not args.no_git,
+                file_policy=selected_policy,
+                module_only=args.module_only,
+                force=args.force,
+                backend=backend,
+                on_config_created=lambda path: print(
+                    f"ariadne: created default configuration at {path}; "
+                    "review the model endpoint before retrying",
+                    file=sys.stderr,
+                ),
+            )
+            for item in generated:
+                print(item.output_path)
+            return 0
         result = inspect_repository(
             path=args.path,
             config_path=args.config,
@@ -54,7 +104,16 @@ def main(argv: list[str] | None = None) -> int:
             git_enabled=not args.no_git,
             file_policy=selected_policy,
         )
-    except (ConfigurationError, RepositoryError, GitError, OSError) as exc:
+    except (
+        ConfigurationError,
+        RepositoryError,
+        GitError,
+        ModelError,
+        GenerationError,
+        ValidationError,
+        PersistenceError,
+        OSError,
+    ) as exc:
         print(f"ariadne: error: {exc}", file=sys.stderr)
         return 2
     for warning in result.context.warnings:

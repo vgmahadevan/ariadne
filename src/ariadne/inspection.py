@@ -22,7 +22,8 @@ def inspect_repository(
 ) -> InspectionResult:
     cwd = (cwd or Path.cwd()).resolve()
     selected_config = config_path.resolve() if config_path else discover_config(cwd)
-    config = load_config(selected_config)
+    ariadne_config = load_config(selected_config)
+    config = ariadne_config.repository
     if file_policy is not None:
         config = replace(config, file_policy=file_policy)
     context, config = resolve_repository(
@@ -39,7 +40,7 @@ def inspect_repository(
     module = discover_modules(
         scan.nodes,
         selection_path=selection_rel,
-        collapse=config.collapse_structural_directories,
+        collapse=ariadne_config.modules.collapse_structural_directories,
     )
     return InspectionResult(
         context=context,

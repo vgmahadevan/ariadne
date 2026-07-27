@@ -20,7 +20,51 @@ class RepositoryConfig:
     exclude: tuple[str, ...] = ()
     use_default_ignores: bool = True
     default_ignores: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ModuleConfig:
     collapse_structural_directories: bool = True
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    provider: str = "openai-compatible"
+    model: str = "local-model"
+    endpoint: str = "http://localhost:8000/v1"
+    context_window: int = 32768
+    max_output_tokens: int = 6000
+    temperature: float = 0.2
+    timeout_seconds: float = 300.0
+    headers: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class ContextConfig:
+    max_initial_tokens: int = 24000
+    max_file_bytes: int = 100000
+    max_tree_depth: int = 3
+    include_parent_docs: bool = True
+    include_generated_docs: bool = True
+    characters_per_token: float = 4.0
+
+
+@dataclass(frozen=True)
+class GenerationConfig:
+    output_suffix: str = "-genai-doc.md"
+    include_front_matter: bool = True
+    atomic_writes: bool = True
+    overwrite_generated: bool = True
+    overwrite_human_modified: bool = False
+
+
+@dataclass(frozen=True)
+class AriadneConfig:
+    repository: RepositoryConfig = RepositoryConfig()
+    modules: ModuleConfig = ModuleConfig()
+    model: ModelConfig = ModelConfig()
+    context: ContextConfig = ContextConfig()
+    generation: GenerationConfig = GenerationConfig()
 
 
 @dataclass(frozen=True)

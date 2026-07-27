@@ -12,7 +12,7 @@ from .models import IgnoredPath, PhysicalNode, RepositoryConfig, RepositoryConte
 
 DEFAULT_IGNORED_NAMES = frozenset(
     {
-        ".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+        ".git", ".ariadne", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
         "node_modules", "bower_components", "vendor", "target", "build", "dist",
         "out", "coverage", ".next", ".nuxt", ".gradle", ".idea", ".vscode",
     }
@@ -136,6 +136,8 @@ def _early_ignore(
 ) -> str | None:
     if is_symlink:
         return "symlink"
+    if name.endswith("-genai-doc.md"):
+        return "generated-document"
     if config.use_default_ignores and name in DEFAULT_IGNORED_NAMES:
         return "default-ignore"
     if extra_defaults.match_file(match_path):
