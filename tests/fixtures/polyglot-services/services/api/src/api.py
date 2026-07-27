@@ -1,0 +1,2 @@
+def serve() -> None:
+    pass

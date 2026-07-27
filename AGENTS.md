@@ -1,8 +1,8 @@
 # AGENTS.md
 
-# Ariadne Weave
+# Ariadne
 
-This repository implements **Ariadne Weave**, a hierarchical documentation generator for large codebases.
+This repository implements **Ariadne**, a hierarchical documentation generator for large codebases.
 
 ## Guiding Principle
 
@@ -62,7 +62,7 @@ Before finishing:
 
 ## Repository Documentation
 
-`docs/ariadne-weave-spec.md` is the authoritative design reference.
+`ariadne-spec.md` is the authoritative design reference.
 
 Consult only the sections relevant to the current milestone instead of treating the entire specification as an implementation prompt.
 
