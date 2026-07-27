@@ -49,6 +49,7 @@ class PhysicalNode:
 class IgnoredPath:
     path: str
     reason: str
+    is_directory: bool = False
 
 
 @dataclass

@@ -14,7 +14,7 @@ from .repository import RepositoryError
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ariadne")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
     inspect_parser = subparsers.add_parser(
         "inspect", help="display the planned logical module hierarchy"
     )
@@ -22,6 +22,13 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--config", type=Path)
     inspect_parser.add_argument("--root")
     inspect_parser.add_argument("--no-git", action="store_true")
+    inspect_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="add paths and ignored directories; repeat for all metadata",
+    )
     policy = inspect_parser.add_mutually_exclusive_group()
     policy.add_argument("--tracked-only", action="store_true")
     policy.add_argument("--include-untracked", action="store_true")
@@ -29,7 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.print_usage()
+        return 0
     selected_policy = None
     if args.tracked_only:
         selected_policy = FilePolicy.TRACKED_ONLY
@@ -48,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     for warning in result.context.warnings:
         print(f"ariadne: warning: {warning}", file=sys.stderr)
-    print(render_inspection(result), end="")
+    print(render_inspection(result, verbosity=min(args.verbose, 2)), end="")
     return 0
 
 

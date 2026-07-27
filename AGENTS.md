@@ -27,7 +27,8 @@ Favor deterministic infrastructure over autonomous behavior.
 
 ## Design Philosophy
 
-* Keep the core simple.
+* Keep the core simple. Implementations should remain lean.
+* Avoid overengineering unless there are compelling downstream benefits.
 * Prefer composition over premature abstraction.
 * Build extension points only where immediately useful.
 * Every optional feature must be independently disableable.

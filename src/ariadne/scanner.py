@@ -58,7 +58,7 @@ def scan_repository(
             if reason is None and git_index and config.respect_gitignore and git_index.is_ignored(rel):
                 reason = "gitignore"
             if reason:
-                ignored.append(IgnoredPath(rel, reason))
+                ignored.append(IgnoredPath(rel, reason, is_directory=is_dir))
                 continue
             if is_dir:
                 nodes.append(
@@ -67,7 +67,13 @@ def scan_repository(
                 walk(path)
                 continue
             if entry.is_symlink():
-                ignored.append(IgnoredPath(rel, "symlink"))
+                ignored.append(
+                    IgnoredPath(
+                        rel,
+                        "symlink",
+                        is_directory=entry.is_dir(follow_symlinks=True),
+                    )
+                )
                 continue
             if config.include and not include.match_file(rel):
                 ignored.append(IgnoredPath(rel, "not-included"))

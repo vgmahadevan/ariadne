@@ -13,9 +13,9 @@ def test_java_fixture_has_stable_collapsed_hierarchy(fixture_repo) -> None:
 
     first = inspect_repository(cwd=root)
     second = inspect_repository(cwd=root)
-    output = render_inspection(first)
+    output = render_inspection(first, verbosity=2)
 
-    assert output == render_inspection(second)
+    assert output == render_inspection(second, verbosity=2)
     assert "optimizer" in output
     assert "collapsed=main/java/com/example" in output
     assert "languages=Java" in output
@@ -44,14 +44,14 @@ def test_subtree_selection_keeps_repository_relative_paths(fixture_repo) -> None
     init_git(root)
     result = inspect_repository(cwd=root, path="packages/web")
     assert result.root_module.physical_path == "packages/web"
-    assert "packages/web" in render_inspection(result)
+    assert "packages/web" in render_inspection(result, verbosity=1)
 
 
 def test_polyglot_fixture_retains_service_boundaries(fixture_repo) -> None:
     root: Path = fixture_repo("polyglot-services")
     init_git(root)
     result = inspect_repository(cwd=root)
-    output = render_inspection(result)
+    output = render_inspection(result, verbosity=2)
     assert "languages=Go" in output
     assert "languages=Python" in output
     assert "api" in output and "worker" in output

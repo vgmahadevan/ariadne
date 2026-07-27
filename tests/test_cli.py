@@ -3,7 +3,16 @@ from pathlib import Path
 from ariadne.cli import main
 
 
-def test_inspect_command_prints_hierarchy_without_git(
+def test_bare_command_prints_usage_without_error(capsys) -> None:
+    status = main([])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert captured.out == "usage: ariadne [-h] {inspect} ...\n"
+    assert captured.err == ""
+
+
+def test_inspect_command_defaults_to_names_only(
     tmp_path: Path, capsys
 ) -> None:
     (tmp_path / "src").mkdir()
@@ -13,9 +22,34 @@ def test_inspect_command_prints_hierarchy_without_git(
 
     captured = capsys.readouterr()
     assert status == 0
-    assert "Logical modules:" in captured.out
-    assert "languages=Python" in captured.out
+    assert "`-- repository" in captured.out
+    assert "path=" not in captured.out
+    assert "languages=" not in captured.out
+    assert "Ignored" not in captured.out
     assert captured.err == ""
+
+
+def test_inspect_verbosity_levels(tmp_path: Path, capsys) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "ignored.js").write_text("", encoding="utf-8")
+    (tmp_path / "ignored.txt").write_text("", encoding="utf-8")
+
+    assert main(["inspect", "--root", str(tmp_path), "--no-git", "-v"]) == 0
+    low = capsys.readouterr().out
+    assert "path=" in low
+    assert "Ignored directories:" in low
+    assert "node_modules [default-ignore]" in low
+    assert "ignored.txt" not in low
+    assert "languages=" not in low
+
+    assert main(["inspect", "--root", str(tmp_path), "--no-git", "-vv"]) == 0
+    high = capsys.readouterr().out
+    assert "Repository:" in high
+    assert "languages=Python" in high
+    assert "Ignored paths:" in high
+    assert "node_modules [default-ignore]" in high
 
 
 def test_inspect_command_reports_invalid_selection(
