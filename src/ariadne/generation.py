@@ -1,21 +1,32 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import os
 import re
 import subprocess
 import tempfile
+import uuid
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
+from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
-from typing import Callable, Iterable
+from typing import Awaitable, Callable, Iterable
 
 import yaml
 
 from .config import discover_config, initialize_config, load_config
 from .inspection import inspect_repository
-from .llm import LLMBackend, ModelError, ModelRequest, OpenAICompatibleBackend
+from .llm import (
+    LLMBackend,
+    ModelError,
+    ModelErrorKind,
+    ModelRequest,
+    OpenAICompatibleBackend,
+)
 from .models import (
     AriadneConfig,
     ContextConfig,
@@ -24,6 +35,7 @@ from .models import (
     LogicalModule,
     PhysicalNode,
 )
+from .state import RunStateStore
 
 
 class GenerationError(RuntimeError):
@@ -56,6 +68,7 @@ class ModuleContext:
     tree: tuple[str, ...]
     files: tuple[ContextFile, ...]
     omissions: tuple[str, ...]
+    missing_parent: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,10 +83,63 @@ class PlannedModule:
 class GenerationResult:
     module_path: str
     output_path: Path
-    model: str
+    status: str
+    model: str | None = None
+    attempts: int = 0
+    error_kind: str | None = None
+    error: str | None = None
+    draft_path: Path | None = None
+    error_status_code: int | None = None
+    retryable: bool | None = None
 
 
-def weave_repository(
+class ModuleStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    GENERATED = "generated"
+    UPDATED = "updated"
+    FAILED = "failed"
+    PARTIAL = "partial"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class WeaveSummary:
+    generated: int = 0
+    updated: int = 0
+    failed: int = 0
+    partial: int = 0
+    cancelled: int = 0
+
+
+@dataclass(frozen=True)
+class ProgressEvent:
+    index: int
+    total: int
+    module: LogicalModule
+    status: str
+    attempt: int = 0
+    error_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class WeaveResult:
+    run_id: str
+    modules: tuple[GenerationResult, ...]
+    summary: WeaveSummary
+    manifest_path: Path
+    interrupted: bool = False
+
+    @property
+    def successful(self) -> tuple[GenerationResult, ...]:
+        return tuple(
+            item
+            for item in self.modules
+            if item.status in {ModuleStatus.GENERATED.value, ModuleStatus.UPDATED.value}
+        )
+
+
+async def weave_repository(
     *,
     cwd: Path | None = None,
     path: str | None = None,
@@ -83,11 +149,14 @@ def weave_repository(
     file_policy: FilePolicy | None = None,
     module_only: bool = False,
     force: bool = False,
+    resume: bool = False,
+    max_concurrency: int | None = None,
     backend: LLMBackend | None = None,
     now: Callable[[], datetime] | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     on_config_created: Callable[[Path], None] | None = None,
-    on_progress: Callable[[int, int, LogicalModule], None] | None = None,
-) -> tuple[GenerationResult, ...]:
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+) -> WeaveResult:
     cwd = (cwd or Path.cwd()).resolve()
     config_start = Path(root).resolve() if root else cwd
     selected_config = (
@@ -114,50 +183,560 @@ def weave_repository(
         file_policy=file_policy,
     )
     selected_backend = backend or OpenAICompatibleBackend(config.model)
+    owns_backend = backend is None
     plans = plan_modules(inspection, config, module_only=module_only)
     _check_collisions(plans)
-    if on_progress is not None:
-        on_progress(0, len(plans), plans[0].module)
-    results: list[GenerationResult] = []
     clock = now or (lambda: datetime.now().astimezone())
     commit = source_commit(inspection)
-    for index, plan in enumerate(plans, start=1):
-        context = assemble_context(
-            inspection,
+    concurrency = (
+        config.generation.max_concurrency
+        if max_concurrency is None
+        else max_concurrency
+    )
+    if concurrency <= 0:
+        raise GenerationError("max concurrency must be a positive integer")
+    store = RunStateStore(inspection.context.root)
+    config_fingerprint = _config_fingerprint(config)
+    selection = inspection.context.selection.relative_to(
+        inspection.context.root
+    ).as_posix() or "."
+    previous = store.load_latest() if resume else None
+    if previous is not None and (
+        previous.get("repository_root") != str(inspection.context.root)
+        or previous.get("selection") != selection
+    ):
+        raise GenerationError(
+            "--resume found no compatible latest run for this repository selection"
+        )
+    started = clock()
+    run_id = (
+        str(previous["run_id"])
+        if previous is not None
+        else f"{started.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    )
+    prior_modules = {
+        item.get("module_id"): item
+        for item in (previous or {}).get("modules", [])
+        if isinstance(item, dict) and isinstance(item.get("module_id"), str)
+    }
+    entries = [
+        _manifest_entry(
+            inspection.context.root,
             plan,
+            prior_modules.get(_module_id(inspection.context.root, plan)),
             config,
-            source_commit_value=commit,
+            config_fingerprint,
+            resume=resume,
         )
-        try:
-            response = selected_backend.generate(build_prompt(context))
-        except ModelError as exc:
-            raise ModelError(
-                exc.kind,
-                f"{exc} Model settings are in {selected_config}. "
-                "Verify that endpoint points to a running OpenAI-compatible "
-                "chat-completions service and that model names and headers are correct.",
-            ) from exc
-        generated_at = clock()
-        document = compose_document(
-            response.text,
-            config=config,
-            module=plan.module,
-            generated_at=generated_at,
-            source_commit_value=commit,
-            model=response.model,
-        )
-        validate_document(document, require_front_matter=config.generation.include_front_matter)
-        persist_document(plan.output, document, config=config, force=force)
-        if not plan.output.is_file():
-            raise PersistenceError(
-                f"documentation output does not exist after persistence: {plan.output}"
+        for plan in plans
+    ]
+    current_ids = {str(entry["module_id"]) for entry in entries}
+    removed_modules = [
+        item
+        for item in (previous or {}).get("modules", [])
+        if isinstance(item, dict) and item.get("module_id") not in current_ids
+    ]
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "repository_root": str(inspection.context.root),
+        "selection": selection,
+        "source_commit": commit,
+        "tool_version": _tool_version(),
+        "model": config.model.model,
+        "config_fingerprint": config_fingerprint,
+        "started_at": (previous or {}).get("started_at", started.isoformat()),
+        "finished_at": None,
+        "interrupted": False,
+        "summary": {},
+        "modules": entries,
+        "removed_modules": removed_modules,
+    }
+    manifest_path = store.save(manifest)
+    results: list[GenerationResult | None] = [None] * len(plans)
+    parent_indices = _parent_indices(plans)
+    completed: set[int] = set()
+    for index, entry in enumerate(entries):
+        if entry["status"] in {
+            ModuleStatus.GENERATED.value,
+            ModuleStatus.UPDATED.value,
+        }:
+            completed.add(index)
+            results[index] = _result_from_entry(inspection.context.root, entry)
+    running: dict[asyncio.Task[GenerationResult], int] = {}
+    report_buffer: dict[int, GenerationResult] = {}
+    next_report = 0
+    while next_report in completed:
+        preserved = results[next_report]
+        if preserved is not None and on_progress is not None:
+            on_progress(
+                ProgressEvent(
+                    next_report + 1,
+                    len(plans),
+                    plans[next_report].module,
+                    preserved.status,
+                    preserved.attempts,
+                    preserved.error_kind,
+                )
             )
-        results.append(
-            GenerationResult(plan.module.physical_path, plan.output, response.model)
+        next_report += 1
+
+    def record(index: int, result: GenerationResult) -> None:
+        nonlocal next_report
+        results[index] = result
+        completed.add(index)
+        _update_manifest_entry(
+            entries[index], result, inspection.context.root, clock().isoformat()
         )
-        if on_progress is not None:
-            on_progress(index, len(plans), plan.module)
-    return tuple(results)
+        store.save(manifest)
+        report_buffer[index] = result
+        while next_report in report_buffer:
+            reported = report_buffer.pop(next_report)
+            if on_progress is not None:
+                on_progress(
+                    ProgressEvent(
+                        next_report + 1,
+                        len(plans),
+                        plans[next_report].module,
+                        reported.status,
+                        reported.attempts,
+                        reported.error_kind,
+                    )
+                )
+            next_report += 1
+
+    async def launch(index: int) -> GenerationResult:
+        entries[index]["status"] = ModuleStatus.RUNNING.value
+        entries[index]["last_attempted_at"] = clock().isoformat()
+        store.save(manifest)
+        parent = parent_indices[index]
+        missing_parent = (
+            parent is not None
+            and results[parent] is not None
+            and results[parent].status
+            not in {ModuleStatus.GENERATED.value, ModuleStatus.UPDATED.value}
+        )
+        return await _execute_module(
+            inspection,
+            plans[index],
+            config,
+            selected_backend,
+            commit,
+            force=force,
+            missing_parent=missing_parent,
+            clock=clock,
+            sleep=sleep,
+            run_id=run_id,
+            on_attempt=lambda attempt: _record_attempt(
+                entries[index], attempt, manifest, store, clock
+            ),
+        )
+
+    interrupted = False
+    try:
+        while len(completed) < len(plans):
+            for index in range(len(plans)):
+                if len(running) >= concurrency:
+                    break
+                if index in completed or index in running.values():
+                    continue
+                parent = parent_indices[index]
+                if parent is None or parent in completed:
+                    running[asyncio.create_task(launch(index))] = index
+            if not running:
+                raise GenerationError("module scheduler could not make progress")
+            done, _ = await asyncio.wait(
+                running, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                index = running.pop(task)
+                record(index, task.result())
+    except asyncio.CancelledError:
+        interrupted = True
+        for task, index in running.items():
+            task.cancel()
+            entries[index]["status"] = ModuleStatus.PENDING.value
+        await asyncio.gather(*running, return_exceptions=True)
+        manifest["interrupted"] = True
+        store.save(manifest)
+        raise
+    finally:
+        if owns_backend and isinstance(selected_backend, OpenAICompatibleBackend):
+            await selected_backend.aclose()
+
+    final_results = tuple(item for item in results if item is not None)
+    summary = _summarize(final_results)
+    manifest["summary"] = summary.__dict__
+    manifest["finished_at"] = clock().isoformat()
+    manifest["interrupted"] = interrupted
+    manifest_path = store.save(manifest)
+    return WeaveResult(run_id, final_results, summary, manifest_path, interrupted)
+
+
+async def _execute_module(
+    inspection: InspectionResult,
+    plan: PlannedModule,
+    config: AriadneConfig,
+    backend: LLMBackend,
+    commit: str | None,
+    *,
+    force: bool,
+    missing_parent: bool,
+    clock: Callable[[], datetime],
+    sleep: Callable[[float], Awaitable[None]],
+    run_id: str,
+    on_attempt: Callable[[int], None],
+) -> GenerationResult:
+    existed = plan.output.is_file()
+    response_text: str | None = None
+    response_model: str | None = None
+    attempts = 0
+    reduce_context = False
+    for attempt in (1, 2):
+        attempts = attempt
+        on_attempt(attempt)
+        attempt_config = config
+        if attempt == 2 and reduce_context:
+            attempt_config = replace(
+                config,
+                context=replace(
+                    config.context,
+                    max_initial_tokens=max(
+                        1, config.context.max_initial_tokens // 2
+                    ),
+                    include_generated_docs=False,
+                ),
+            )
+        try:
+            context = assemble_context(
+                inspection,
+                plan,
+                attempt_config,
+                source_commit_value=commit,
+                missing_parent=missing_parent,
+            )
+            response = await backend.generate(build_prompt(context))
+            response_text = response.text
+            response_model = response.model
+            document = compose_document(
+                response.text,
+                config=config,
+                module=plan.module,
+                generated_at=clock(),
+                source_commit_value=commit,
+                model=response.model,
+            )
+            validate_document(
+                document,
+                require_front_matter=config.generation.include_front_matter,
+            )
+            persist_document(plan.output, document, config=config, force=force)
+            if not plan.output.is_file():
+                raise PersistenceError(
+                    "documentation output does not exist after persistence: "
+                    f"{plan.output}"
+                )
+            return GenerationResult(
+                plan.module.physical_path,
+                plan.output,
+                (
+                    ModuleStatus.UPDATED.value
+                    if existed
+                    else ModuleStatus.GENERATED.value
+                ),
+                response.model,
+                attempts,
+            )
+        except asyncio.CancelledError:
+            raise
+        except ModelError as exc:
+            if attempt == 1 and exc.retryable:
+                reduce_context = exc.kind is ModelErrorKind.CONTEXT_LENGTH
+                delay = exc.retry_after if exc.retry_after is not None else 1.0
+                await sleep(min(30.0, delay))
+                continue
+            return GenerationResult(
+                plan.module.physical_path,
+                plan.output,
+                ModuleStatus.FAILED.value,
+                response_model,
+                attempts,
+                exc.kind.value,
+                str(exc),
+                None,
+                exc.status_code,
+                exc.retryable,
+            )
+        except (ValidationError, PersistenceError, OSError) as exc:
+            draft_path = None
+            if response_text is not None and _markdown_like(response_text):
+                try:
+                    draft_path = _persist_partial_draft(
+                        inspection.context.root,
+                        run_id,
+                        plan,
+                        response_text,
+                        response_model or config.model.model,
+                        clock(),
+                    )
+                except PersistenceError as draft_exc:
+                    exc = draft_exc
+            kind = (
+                "validation"
+                if isinstance(exc, ValidationError)
+                else "persistence"
+            )
+            return GenerationResult(
+                plan.module.physical_path,
+                plan.output,
+                (
+                    ModuleStatus.PARTIAL.value
+                    if draft_path is not None
+                    else ModuleStatus.FAILED.value
+                ),
+                response_model,
+                attempts,
+                kind,
+                str(exc),
+                draft_path,
+            )
+        except Exception as exc:
+            return GenerationResult(
+                plan.module.physical_path,
+                plan.output,
+                ModuleStatus.FAILED.value,
+                response_model,
+                attempts,
+                "internal",
+                f"{type(exc).__name__}: {exc}",
+            )
+    raise AssertionError("module attempts exhausted")
+
+
+def _manifest_entry(
+    root: Path,
+    plan: PlannedModule,
+    previous: dict[str, object] | None,
+    config: AriadneConfig,
+    config_fingerprint: str,
+    *,
+    resume: bool,
+) -> dict[str, object]:
+    module_id = _module_id(root, plan)
+    output = plan.output.relative_to(root).as_posix()
+    entry: dict[str, object] = {
+        "module_id": module_id,
+        "logical_path": plan.module.physical_path,
+        "output_path": output,
+        "parent_output": (
+            plan.parent_output.relative_to(root).as_posix()
+            if plan.parent_output is not None
+            else None
+        ),
+        "status": ModuleStatus.PENDING.value,
+        "attempts": 0,
+        "model": None,
+        "error_kind": None,
+        "error": None,
+        "draft_path": None,
+        "error_status_code": None,
+        "retryable": None,
+        "config_fingerprint": config_fingerprint,
+        "last_attempted_at": None,
+        "finished_at": None,
+    }
+    if (
+        resume
+        and previous is not None
+        and previous.get("config_fingerprint") == config_fingerprint
+        and previous.get("output_path") == output
+        and previous.get("status")
+        in {ModuleStatus.GENERATED.value, ModuleStatus.UPDATED.value}
+        and _valid_existing_output(plan.output, config)
+    ):
+        entry.update(previous)
+    return entry
+
+
+def _update_manifest_entry(
+    entry: dict[str, object],
+    result: GenerationResult,
+    root: Path,
+    finished_at: str,
+) -> None:
+    entry.update(
+        {
+            "status": result.status,
+            "attempts": result.attempts,
+            "model": result.model,
+            "error_kind": result.error_kind,
+            "error": result.error,
+            "draft_path": (
+                result.draft_path.relative_to(root).as_posix()
+                if result.draft_path is not None
+                else None
+            ),
+            "error_status_code": result.error_status_code,
+            "retryable": result.retryable,
+            "finished_at": finished_at,
+        }
+    )
+
+
+def _record_attempt(
+    entry: dict[str, object],
+    attempt: int,
+    manifest: dict[str, object],
+    store: RunStateStore,
+    clock: Callable[[], datetime],
+) -> None:
+    entry["attempts"] = attempt
+    entry["last_attempted_at"] = clock().isoformat()
+    store.save(manifest)
+
+
+def _result_from_entry(root: Path, entry: dict[str, object]) -> GenerationResult:
+    draft = entry.get("draft_path")
+    return GenerationResult(
+        str(entry["logical_path"]),
+        root / str(entry["output_path"]),
+        str(entry["status"]),
+        str(entry["model"]) if entry.get("model") is not None else None,
+        int(entry.get("attempts", 0)),
+        (
+            str(entry["error_kind"])
+            if entry.get("error_kind") is not None
+            else None
+        ),
+        str(entry["error"]) if entry.get("error") is not None else None,
+        root / str(draft) if draft is not None else None,
+        (
+            int(entry["error_status_code"])
+            if entry.get("error_status_code") is not None
+            else None
+        ),
+        (
+            bool(entry["retryable"])
+            if entry.get("retryable") is not None
+            else None
+        ),
+    )
+
+
+def _parent_indices(plans: tuple[PlannedModule, ...]) -> tuple[int | None, ...]:
+    by_output = {plan.output: index for index, plan in enumerate(plans)}
+    return tuple(
+        by_output.get(plan.parent_output) if plan.parent_output is not None else None
+        for plan in plans
+    )
+
+
+def _module_id(root: Path, plan: PlannedModule) -> str:
+    identity = (
+        f"{plan.module.physical_path}\0"
+        f"{plan.output.relative_to(root).as_posix()}"
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+
+def _config_fingerprint(config: AriadneConfig) -> str:
+    payload = {
+        "model": config.model.__dict__,
+        "context": config.context.__dict__,
+        "generation": config.generation.__dict__,
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _valid_existing_output(path: Path, config: AriadneConfig) -> bool:
+    try:
+        validate_document(
+            path.read_text(encoding="utf-8"),
+            require_front_matter=config.generation.include_front_matter,
+        )
+    except (OSError, UnicodeError, ValidationError):
+        return False
+    return True
+
+
+def _markdown_like(text: str) -> bool:
+    return bool(re.search(r"^# \S.*$", text, flags=re.MULTILINE))
+
+
+def _persist_partial_draft(
+    root: Path,
+    run_id: str,
+    plan: PlannedModule,
+    text: str,
+    model: str,
+    generated_at: datetime,
+) -> Path:
+    destination = (
+        root
+        / ".ariadne"
+        / "drafts"
+        / run_id
+        / (
+            f"{_slug(plan.module.physical_path)}-"
+            f"{_module_id(root, plan)[:8]}.md"
+        )
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "ariadne": {
+            "generated": True,
+            "draft": True,
+            "generated_at": generated_at.isoformat(),
+            "tool_version": _tool_version(),
+            "model": model,
+            "logical_module": plan.module.physical_path,
+            "status": "PARTIAL",
+            "human_reviewed": False,
+            "human_modified": False,
+        }
+    }
+    document = (
+        "---\n"
+        f"{yaml.safe_dump(metadata, sort_keys=False).strip()}\n"
+        "---\n\n"
+        f"{text.strip()}\n"
+    )
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(document)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        os.replace(temporary, destination)
+    except OSError as exc:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise PersistenceError(f"cannot persist partial draft: {destination}") from exc
+    return destination
+
+
+def _summarize(results: tuple[GenerationResult, ...]) -> WeaveSummary:
+    counts = {
+        status.value: sum(item.status == status.value for item in results)
+        for status in ModuleStatus
+    }
+    return WeaveSummary(
+        generated=counts[ModuleStatus.GENERATED.value],
+        updated=counts[ModuleStatus.UPDATED.value],
+        failed=counts[ModuleStatus.FAILED.value],
+        partial=counts[ModuleStatus.PARTIAL.value],
+        cancelled=counts[ModuleStatus.CANCELLED.value],
+    )
 
 
 def top_down_modules(
@@ -237,6 +816,7 @@ def assemble_context(
     config: AriadneConfig,
     *,
     source_commit_value: str | None = None,
+    missing_parent: bool = False,
 ) -> ModuleContext:
     module = plan.module
     nodes = [
@@ -249,6 +829,12 @@ def assemble_context(
         inspection.context.root, nodes, plan, config
     )
     files, omissions = _read_bounded_files(candidates, config.context, config)
+    if missing_parent:
+        omissions = (
+            "- newly generated parent documentation unavailable because the "
+            "parent attempt failed",
+            *omissions,
+        )
     return ModuleContext(
         repository_name=inspection.context.root.name,
         repository_root=str(inspection.context.root),
@@ -258,6 +844,7 @@ def assemble_context(
         tree=tree,
         files=files,
         omissions=omissions,
+        missing_parent=missing_parent,
     )
 
 

@@ -24,7 +24,33 @@ ariadne weave [path]
 ```
 
 While weaving, Ariadne writes module progress bars to stderr and keeps generated
-document paths on stdout for scripting.
+document paths on stdout for scripting. A weave continues after individual
+module failures and exits with status 1 after printing its complete summary.
+
+Interrupted or partially failed runs can be reconciled and resumed:
+
+```bash
+ariadne weave [path] --resume
+```
+
+Independent eligible branches can run concurrently. The conservative default
+is one active model request:
+
+```bash
+ariadne weave [path] --max-concurrency 4
+```
+
+Safely preview or remove Ariadne-owned documents without touching unrelated
+Markdown:
+
+```bash
+ariadne clean [path] --dry-run
+ariadne clean [path]
+```
+
+Human-reviewed or modified generated documents are retained unless
+`--include-human-modified` is supplied. `--drafts` also selects partial draft
+artifacts while preserving run history.
 
 Use `--module-only` to generate only the selected module. Ariadne uses an
 OpenAI-compatible `/v1/chat/completions` endpoint configured in
@@ -40,6 +66,8 @@ model:
   temperature: 0.2
   timeout_seconds: 300
   headers: {}
+generation:
+  max_concurrency: 1
 ```
 
 The same request shape is compatible with common vLLM OpenAI servers. Generated

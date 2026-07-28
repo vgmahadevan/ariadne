@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -8,32 +9,38 @@ from .cleanup import clean_repository
 from .config import ConfigurationError
 from .generation import (
     GenerationError,
+    ModuleStatus,
     PersistenceError,
+    ProgressEvent,
     ValidationError,
     weave_repository,
 )
 from .git import GitError
 from .inspection import inspect_repository
 from .llm import LLMBackend, ModelError
-from .models import FilePolicy, LogicalModule
+from .models import FilePolicy
 from .render import render_inspection
 from .repository import RepositoryError
+from .state import StateError
 
 
 class _ProgressBar:
     width = 24
 
-    def update(
-        self, completed: int, total: int, module: LogicalModule
-    ) -> None:
+    def update(self, event: ProgressEvent) -> None:
+        completed = event.index
+        total = event.total
+        module = event.module
         ratio = completed / total if total else 1.0
         filled = min(self.width, int(ratio * self.width))
         bar = "#" * filled + "-" * (self.width - filled)
         percent = int(ratio * 100)
-        state = "starting" if completed == 0 else module.physical_path
+        detail = event.status
+        if event.error_kind:
+            detail = f"{detail}: {event.error_kind}"
         print(
             f"ariadne: weaving [{bar}] {completed}/{total} "
-            f"({percent:3d}%) {state}",
+            f"({percent:3d}%) {module.physical_path} - {detail}",
             file=sys.stderr,
         )
 
@@ -74,6 +81,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="allow replacement of human-modified documentation",
+    )
+    weave_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume the latest interrupted or incomplete compatible weave",
+    )
+    weave_parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        help="maximum number of active model requests",
     )
     weave_policy = weave_parser.add_mutually_exclusive_group()
     weave_policy.add_argument("--tracked-only", action="store_true")
@@ -139,25 +156,47 @@ def main(
             return 0
         if args.command == "weave":
             progress = _ProgressBar()
-            generated = weave_repository(
-                path=args.path,
-                config_path=args.config,
-                root=args.root,
-                git_enabled=not args.no_git,
-                file_policy=selected_policy,
-                module_only=args.module_only,
-                force=args.force,
-                backend=backend,
-                on_config_created=lambda path: print(
-                    f"ariadne: created default configuration at {path}; "
-                    "review the model endpoint before retrying",
-                    file=sys.stderr,
+            generated = asyncio.run(
+                weave_repository(
+                    path=args.path,
+                    config_path=args.config,
+                    root=args.root,
+                    git_enabled=not args.no_git,
+                    file_policy=selected_policy,
+                    module_only=args.module_only,
+                    force=args.force,
+                    resume=args.resume,
+                    max_concurrency=args.max_concurrency,
+                    backend=backend,
+                    on_config_created=lambda path: print(
+                        f"ariadne: created default configuration at {path}; "
+                        "review the model endpoint before retrying",
+                        file=sys.stderr,
+                    ),
+                    on_progress=progress.update,
                 ),
-                on_progress=progress.update,
             )
-            for item in generated:
+            for item in generated.successful:
                 print(item.output_path)
-            return 0
+            summary = generated.summary
+            print(
+                "ariadne: weave complete: "
+                f"generated={summary.generated} updated={summary.updated} "
+                f"failed={summary.failed} partial={summary.partial} "
+                f"cancelled={summary.cancelled}",
+                file=sys.stderr,
+            )
+            for item in generated.modules:
+                if item.status in {
+                    ModuleStatus.FAILED.value,
+                    ModuleStatus.PARTIAL.value,
+                }:
+                    print(
+                        f"ariadne: {item.module_path}: "
+                        f"{item.error_kind or 'error'}: {item.error or ''}",
+                        file=sys.stderr,
+                    )
+            return 1 if summary.failed or summary.partial else 0
         result = inspect_repository(
             path=args.path,
             config_path=args.config,
@@ -173,10 +212,14 @@ def main(
         GenerationError,
         ValidationError,
         PersistenceError,
+        StateError,
         OSError,
     ) as exc:
         print(f"ariadne: error: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("ariadne: cancelled", file=sys.stderr)
+        return 130
     for warning in result.context.warnings:
         print(f"ariadne: warning: {warning}", file=sys.stderr)
     print(render_inspection(result, verbosity=min(args.verbose, 2)), end="")

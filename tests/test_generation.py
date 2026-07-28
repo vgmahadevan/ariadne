@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,7 +36,7 @@ class FakeBackend:
     def __init__(self) -> None:
         self.requests: list[ModelRequest] = []
 
-    def generate(self, request: ModelRequest) -> ModelResponse:
+    async def generate(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
         return ModelResponse(
             "# Generated Module\n\n## Summary\n\nGrounded fixture documentation.",
@@ -44,7 +45,7 @@ class FakeBackend:
 
 
 class FailingBackend:
-    def generate(self, request: ModelRequest) -> ModelResponse:
+    async def generate(self, request: ModelRequest) -> ModelResponse:
         raise ModelError(ModelErrorKind.CONNECTION, "endpoint could not be reached.")
 
 
@@ -295,22 +296,24 @@ def test_weave_generates_subtree_and_module_only(tmp_path: Path) -> None:
     backend = FakeBackend()
     progress: list[tuple[int, int, str]] = []
 
-    results = weave_repository(
-        cwd=tmp_path,
-        path="src",
-        config_path=config_path,
-        git_enabled=False,
-        backend=backend,
-        now=lambda: datetime(2026, 7, 26, tzinfo=timezone.utc),
-        on_progress=lambda completed, total, module: progress.append(
-            (completed, total, module.physical_path)
+    results = asyncio.run(
+        weave_repository(
+            cwd=tmp_path,
+            path="src",
+            config_path=config_path,
+            git_enabled=False,
+            backend=backend,
+            now=lambda: datetime(2026, 7, 26, tzinfo=timezone.utc),
+            on_progress=lambda event: progress.append(
+                (event.index, event.total, event.module.physical_path)
+            ),
         ),
     )
 
-    assert len(results) == 2
-    assert all(item.output_path.is_file() for item in results)
+    assert len(results.modules) == 2
+    assert all(item.output_path.is_file() for item in results.successful)
     assert len(backend.requests) == 2
-    assert progress == [(0, 2, "src"), (1, 2, "src"), (2, 2, "src/child")]
+    assert progress == [(1, 2, "src"), (2, 2, "src/child")]
     assert "prior AI-generated documentation; unverified" in (
         backend.requests[1].user_prompt
     )
@@ -319,36 +322,42 @@ def test_weave_generates_subtree_and_module_only(tmp_path: Path) -> None:
     other.mkdir()
     (other / "main.py").write_text("VALUE = 2\n", encoding="utf-8")
     only_backend = FakeBackend()
-    only = weave_repository(
-        cwd=tmp_path,
-        path="other",
-        config_path=config_path,
-        git_enabled=False,
-        module_only=True,
-        backend=only_backend,
+    only = asyncio.run(
+        weave_repository(
+            cwd=tmp_path,
+            path="other",
+            config_path=config_path,
+            git_enabled=False,
+            module_only=True,
+            backend=only_backend,
+        )
     )
-    assert len(only) == 1
+    assert len(only.modules) == 1
     assert len(only_backend.requests) == 1
 
 
-def test_weave_model_error_points_to_configuration(tmp_path: Path) -> None:
+def test_weave_model_error_is_isolated_and_retried(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
     config_path = _config(tmp_path)
 
-    with pytest.raises(ModelError) as captured:
+    async def no_sleep(delay: float) -> None:
+        pass
+
+    result = asyncio.run(
         weave_repository(
             cwd=tmp_path,
             path="src",
             config_path=config_path,
             git_enabled=False,
             backend=FailingBackend(),
+            sleep=no_sleep,
         )
+    )
 
-    message = str(captured.value)
-    assert str(config_path) in message
-    assert "OpenAI-compatible chat-completions service" in message
-    assert "model names and headers" in message
+    assert result.summary.failed == 1
+    assert result.modules[0].error_kind == "connection"
+    assert result.modules[0].attempts == 2
 
 
 def test_invalid_regeneration_preserves_existing_document(tmp_path: Path) -> None:
@@ -367,10 +376,10 @@ def test_invalid_regeneration_preserves_existing_document(tmp_path: Path) -> Non
     destination.write_text(existing, encoding="utf-8")
 
     class InvalidBackend:
-        def generate(self, request: ModelRequest) -> ModelResponse:
+        async def generate(self, request: ModelRequest) -> ModelResponse:
             return ModelResponse("This response has no title.", "invalid-model")
 
-    with pytest.raises(ValidationError, match="level-one title"):
+    result = asyncio.run(
         weave_repository(
             cwd=tmp_path,
             path="src",
@@ -379,5 +388,8 @@ def test_invalid_regeneration_preserves_existing_document(tmp_path: Path) -> Non
             module_only=True,
             backend=InvalidBackend(),
         )
+    )
 
+    assert result.summary.failed == 1
+    assert result.modules[0].error_kind == "validation"
     assert destination.read_text(encoding="utf-8") == existing

@@ -1,6 +1,7 @@
+import asyncio
 import json
-import urllib.error
 
+import httpx
 import pytest
 
 from ariadne.llm import (
@@ -12,33 +13,29 @@ from ariadne.llm import (
 from ariadne.models import ModelConfig
 
 
-class FakeResponse:
-    def __init__(self, payload: dict) -> None:
-        self.payload = payload
+def _run(backend: OpenAICompatibleBackend):
+    async def invoke():
+        try:
+            return await backend.generate(ModelRequest("system", "user"))
+        finally:
+            await backend.aclose()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return None
-
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode()
+    return asyncio.run(invoke())
 
 
 def test_openai_compatible_backend_uses_chat_completions_shape() -> None:
     captured = {}
 
-    def open_url(request, *, timeout):
-        captured["url"] = request.full_url
-        captured["headers"] = dict(request.header_items())
-        captured["payload"] = json.loads(request.data)
-        captured["timeout"] = timeout
-        return FakeResponse(
-            {
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["headers"] = dict(request.headers)
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
                 "model": "served-vllm-model",
                 "choices": [{"message": {"content": "# Generated"}}],
-            }
+            },
         )
 
     config = ModelConfig(
@@ -47,9 +44,12 @@ def test_openai_compatible_backend_uses_chat_completions_shape() -> None:
         timeout_seconds=12,
         headers=(("Authorization", "Bearer secret"), ("X-Tenant", "docs")),
     )
-    response = OpenAICompatibleBackend(config, open_url=open_url).generate(
-        ModelRequest("system", "user")
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers=dict(config.headers),
+        timeout=config.timeout_seconds,
     )
+    response = _run(OpenAICompatibleBackend(config, client=client))
 
     assert captured["url"] == "http://vllm:8000/v1/chat/completions"
     assert captured["payload"]["messages"] == [
@@ -57,35 +57,34 @@ def test_openai_compatible_backend_uses_chat_completions_shape() -> None:
         {"role": "user", "content": "user"},
     ]
     assert captured["payload"]["max_tokens"] == config.max_output_tokens
-    assert captured["headers"]["Authorization"] == "Bearer secret"
-    assert captured["timeout"] == 12
+    assert captured["headers"]["authorization"] == "Bearer secret"
     assert response.text == "# Generated"
     assert response.model == "served-vllm-model"
+    asyncio.run(client.aclose())
 
 
 def test_backend_classifies_context_errors_without_leaking_response() -> None:
-    def open_url(request, *, timeout):
-        raise urllib.error.HTTPError(
-            request.full_url,
-            400,
-            "bad request",
-            {},
-            FakeResponse({"error": "maximum context tokens exceeded"}),
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400, json={"error": "maximum context tokens exceeded"}
         )
 
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     with pytest.raises(ModelError) as captured:
-        OpenAICompatibleBackend(ModelConfig(), open_url=open_url).generate(
-            ModelRequest("system", "user")
-        )
+        _run(OpenAICompatibleBackend(ModelConfig(), client=client))
 
     assert captured.value.kind is ModelErrorKind.CONTEXT_LENGTH
+    assert captured.value.status_code == 400
+    assert captured.value.retryable
     assert "maximum context" not in str(captured.value)
+    asyncio.run(client.aclose())
 
 
 def test_backend_accepts_structured_text_content() -> None:
-    def open_url(request, *, timeout):
-        return FakeResponse(
-            {
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
                 "choices": [
                     {
                         "message": {
@@ -96,43 +95,54 @@ def test_backend_accepts_structured_text_content() -> None:
                         }
                     }
                 ]
-            }
+            },
         )
 
-    response = OpenAICompatibleBackend(
-        ModelConfig(), open_url=open_url
-    ).generate(ModelRequest("system", "user"))
-
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    response = _run(OpenAICompatibleBackend(ModelConfig(), client=client))
     assert response.text == "# Module\n\nSummary"
+    asyncio.run(client.aclose())
+
+
+def test_rate_limit_carries_bounded_retry_metadata() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "12"}, json={})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(ModelError) as captured:
+        _run(OpenAICompatibleBackend(ModelConfig(), client=client))
+    assert captured.value.kind is ModelErrorKind.RATE_LIMIT
+    assert captured.value.retry_after == 12
+    asyncio.run(client.aclose())
 
 
 def test_invalid_response_explains_expected_shape_and_hides_query() -> None:
-    def open_url(request, *, timeout):
-        return FakeResponse({"output": "different API"})
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"output": "different API"})
 
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     config = ModelConfig(endpoint="http://service.test/v1?api_key=secret")
     with pytest.raises(ModelError) as captured:
-        OpenAICompatibleBackend(config, open_url=open_url).generate(
-            ModelRequest("system", "user")
-        )
+        _run(OpenAICompatibleBackend(config, client=client))
 
     message = str(captured.value)
     assert "choices[0].message.content" in message
     assert "api_key" not in message
     assert "secret" not in message
+    asyncio.run(client.aclose())
 
 
 def test_connection_error_names_sanitized_endpoint() -> None:
-    def open_url(request, *, timeout):
-        raise urllib.error.URLError("connection refused")
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
 
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     config = ModelConfig(endpoint="http://localhost:9999/v1?token=secret")
     with pytest.raises(ModelError) as captured:
-        OpenAICompatibleBackend(config, open_url=open_url).generate(
-            ModelRequest("system", "user")
-        )
+        _run(OpenAICompatibleBackend(config, client=client))
 
     assert captured.value.kind is ModelErrorKind.CONNECTION
     assert "http://localhost:9999/v1" in str(captured.value)
     assert "token" not in str(captured.value)
     assert "secret" not in str(captured.value)
+    asyncio.run(client.aclose())

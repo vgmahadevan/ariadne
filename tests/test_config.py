@@ -66,6 +66,7 @@ context:
   include_generated_docs: false
 generation:
   overwrite_generated: false
+  max_concurrency: 3
 """,
         encoding="utf-8",
     )
@@ -77,6 +78,7 @@ generation:
     assert dict(config.model.headers)["Authorization"] == "Bearer token"
     assert not config.context.include_generated_docs
     assert not config.generation.overwrite_generated
+    assert config.generation.max_concurrency == 3
 
 
 def test_initializes_default_config_and_gitignore_once(tmp_path: Path) -> None:

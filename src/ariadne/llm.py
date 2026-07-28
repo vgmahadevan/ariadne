@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable, Protocol
+from email.utils import parsedate_to_datetime
+from typing import Protocol
+
+import httpx
 
 from .models import ModelConfig
 
@@ -34,16 +36,35 @@ class ModelErrorKind(str, Enum):
 
 
 class ModelError(RuntimeError):
-    def __init__(self, kind: ModelErrorKind, message: str) -> None:
+    def __init__(
+        self,
+        kind: ModelErrorKind,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.kind = kind
+        self.status_code = status_code
+        self.retryable = (
+            kind
+            in {
+                ModelErrorKind.TIMEOUT,
+                ModelErrorKind.CONNECTION,
+                ModelErrorKind.RATE_LIMIT,
+                ModelErrorKind.SERVER,
+                ModelErrorKind.CONTEXT_LENGTH,
+            }
+            if retryable is None
+            else retryable
+        )
+        self.retry_after = retry_after
 
 
 class LLMBackend(Protocol):
-    def generate(self, request: ModelRequest) -> ModelResponse: ...
-
-
-OpenUrl = Callable[..., object]
+    async def generate(self, request: ModelRequest) -> ModelResponse: ...
 
 
 class OpenAICompatibleBackend:
@@ -51,12 +72,24 @@ class OpenAICompatibleBackend:
         self,
         config: ModelConfig,
         *,
-        open_url: OpenUrl = urllib.request.urlopen,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self.config = config
-        self._open_url = open_url
+        self._client = client
+        self._owns_client = client is None
 
-    def generate(self, request: ModelRequest) -> ModelResponse:
+    async def __aenter__(self) -> OpenAICompatibleBackend:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._owns_client and self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def generate(self, request: ModelRequest) -> ModelResponse:
         payload = {
             "model": self.config.model,
             "messages": [
@@ -66,53 +99,42 @@ class OpenAICompatibleBackend:
             "max_tokens": self.config.max_output_tokens,
             "temperature": self.config.temperature,
         }
-        headers = {
-            "Content-Type": "application/json",
-            **dict(self.config.headers),
-        }
-        http_request = urllib.request.Request(
-            f"{self.config.endpoint}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
+        client = self._client
+        if client is None:
+            client = httpx.AsyncClient(
+                headers=dict(self.config.headers),
+                timeout=self.config.timeout_seconds,
+            )
+            self._client = client
         try:
-            with self._open_url(
-                http_request, timeout=self.config.timeout_seconds
-            ) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise ModelError(
-                _http_error_kind(exc.code, detail),
-                f"model endpoint {_display_endpoint(self.config.endpoint)} "
-                f"returned HTTP {exc.code}.",
-            ) from exc
-        except TimeoutError as exc:
+            response = await client.post(
+                f"{self.config.endpoint}/chat/completions",
+                json=payload,
+            )
+        except httpx.TimeoutException as exc:
             raise ModelError(
                 ModelErrorKind.TIMEOUT,
-                f"model endpoint {_display_endpoint(self.config.endpoint)} timed out "
-                f"after {self.config.timeout_seconds:g} seconds.",
+                f"model endpoint {_display_endpoint(self.config.endpoint)} "
+                f"timed out after {self.config.timeout_seconds:g} seconds.",
             ) from exc
-        except (urllib.error.URLError, OSError) as exc:
-            reason = getattr(exc, "reason", None)
-            kind = (
-                ModelErrorKind.TIMEOUT
-                if isinstance(reason, TimeoutError)
-                else ModelErrorKind.CONNECTION
-            )
-            description = (
-                f"timed out after {self.config.timeout_seconds:g} seconds"
-                if kind is ModelErrorKind.TIMEOUT
-                else "could not be reached"
-            )
+        except httpx.RequestError as exc:
+            raise ModelError(
+                ModelErrorKind.CONNECTION,
+                f"model endpoint {_display_endpoint(self.config.endpoint)} "
+                "could not be reached.",
+            ) from exc
+        if response.is_error:
+            detail = response.text
+            kind = _http_error_kind(response.status_code, detail)
             raise ModelError(
                 kind,
                 f"model endpoint {_display_endpoint(self.config.endpoint)} "
-                f"{description}.",
-            ) from exc
+                f"returned HTTP {response.status_code}.",
+                status_code=response.status_code,
+                retry_after=_retry_after(response.headers.get("Retry-After")),
+            )
         try:
-            data = json.loads(raw)
+            data = response.json()
             text = _extract_text(data)
             response_model = data.get("model", self.config.model)
         except json.JSONDecodeError as exc:
@@ -147,7 +169,7 @@ def _http_error_kind(status: int, detail: str) -> ModelErrorKind:
     lowered = detail.lower()
     if status == 400 and ("context" in lowered or "token" in lowered):
         return ModelErrorKind.CONTEXT_LENGTH
-    return ModelErrorKind.SERVER
+    return ModelErrorKind.INVALID_RESPONSE
 
 
 def _extract_text(data: object) -> str:
@@ -176,3 +198,18 @@ def _display_endpoint(endpoint: str) -> str:
     return urllib.parse.urlunsplit(
         (parsed.scheme, parsed.netloc, parsed.path, "", "")
     )
+
+
+def _retry_after(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            delay = (
+                parsedate_to_datetime(value) - datetime.now(timezone.utc)
+            ).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return max(0.0, delay)

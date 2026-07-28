@@ -47,6 +47,7 @@ generation:
   atomic_writes: true
   overwrite_generated: true
   overwrite_human_modified: false
+  max_concurrency: 1
 """
 
 
@@ -107,7 +108,7 @@ def load_config(path: Path | None) -> AriadneConfig:
     }
     allowed_generation = {
         "output_suffix", "include_front_matter", "atomic_writes",
-        "overwrite_generated", "overwrite_human_modified",
+        "overwrite_generated", "overwrite_human_modified", "max_concurrency",
     }
     _reject_unknown(repository, allowed_repository, "repository")
     _reject_unknown(modules, allowed_modules, "modules")
@@ -182,6 +183,7 @@ def load_config(path: Path | None) -> AriadneConfig:
             overwrite_human_modified=_boolean(
                 generation, "overwrite_human_modified", False
             ),
+            max_concurrency=_positive_int(generation, "max_concurrency", 1),
         ),
     )
 

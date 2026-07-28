@@ -5,8 +5,13 @@ from ariadne.llm import ModelResponse
 
 
 class CliFakeBackend:
-    def generate(self, request):
+    async def generate(self, request):
         return ModelResponse("# CLI Module\n\n## Summary\n\nGenerated.", "fake")
+
+
+class CliInvalidBackend:
+    async def generate(self, request):
+        return ModelResponse("# One\n\n# Two\n", "fake")
 
 
 def test_bare_command_prints_usage_without_error(capsys) -> None:
@@ -92,8 +97,8 @@ def test_weave_command_uses_injected_model_and_writes_document(
     assert (tmp_path / ".ariadne" / "config.yaml").is_file()
     assert ".ariadne/" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert "created default configuration" in captured.err
-    assert "weaving [------------------------] 0/1" in captured.err
     assert "weaving [########################] 1/1 (100%)" in captured.err
+    assert "weave complete: generated=1" in captured.err
 
 
 def test_clean_command_dry_run_then_removes_generated_document(
@@ -133,3 +138,21 @@ def test_clean_command_dry_run_then_removes_generated_document(
     assert str(destination) in removed.out
     assert "removed 1 generated artifact(s)" in removed.err
     assert not destination.exists()
+
+
+def test_weave_returns_partial_failure_exit_code(tmp_path: Path, capsys) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    status = main(
+        [
+            "weave", str(tmp_path / "src"), "--root", str(tmp_path), "--no-git",
+            "--include-untracked", "--module-only",
+        ],
+        backend=CliInvalidBackend(),
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "partial=1" in captured.err
+    assert "validation" in captured.err
