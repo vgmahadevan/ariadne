@@ -119,20 +119,12 @@ def weave_repository(
     if on_progress is not None:
         on_progress(0, len(plans), plans[0].module)
     results: list[GenerationResult] = []
-    generated: dict[str, Path] = {}
     clock = now or (lambda: datetime.now().astimezone())
     commit = source_commit(inspection)
     for index, plan in enumerate(plans, start=1):
-        parent_output = generated.get(_parent_module_path(plan.module.physical_path))
-        effective_plan = PlannedModule(
-            plan.module,
-            plan.ancestors,
-            parent_output or plan.parent_output,
-            plan.output,
-        )
         context = assemble_context(
             inspection,
-            effective_plan,
+            plan,
             config,
             source_commit_value=commit,
         )
@@ -160,7 +152,6 @@ def weave_repository(
             raise PersistenceError(
                 f"documentation output does not exist after persistence: {plan.output}"
             )
-        generated[plan.module.physical_path] = plan.output
         results.append(
             GenerationResult(plan.module.physical_path, plan.output, response.model)
         )
@@ -322,7 +313,7 @@ def build_prompt(context: ModuleContext) -> ModelRequest:
             "# Generation instructions",
             "- Explain the module's summary, responsibilities, operation, and organization.",
             "- Reference concrete files and symbols when supported by evidence.",
-            "- ONLY IF USEFUL: Describe parent, child, and external relationships if established.",
+            "- Describe parent, child, and external relationships only when useful and established by evidence.",
             "- Avoid file-by-file paraphrase and omit irrelevant sections.",
             "- State uncertainties instead of inventing intent.",
             "- Use repository-relative Markdown links.",
@@ -336,8 +327,10 @@ def build_prompt(context: ModuleContext) -> ModelRequest:
             "How It Works; Architecture and Organization; Important Files and APIs; "
             "Data Flow; Dependencies and Relationships; Configuration and External "
             "Interfaces; Uncertainties and Review Notes; Areas for Improvement.",
-            "You have A LOT of freedom with what sections to use, including ad hoc sections.",
-            "For Areas for Improvement, surface obvious problems like unintentionlly duplicated code, or critical issues that need attention. But be concise and don't just dump TODOs."
+            "Use whichever sections fit the evidence; useful ad hoc sections are allowed.",
+            "Include Areas for Improvement only for concrete, significant problems "
+            "such as unintended duplication or critical issues. Be concise and do "
+            "not turn it into a TODO inventory.",
         ]
     )
     return ModelRequest(system, "\n".join(lines))
@@ -498,7 +491,11 @@ def _context_candidates(
         )
     if config.context.include_generated_docs:
         generated_paths: set[Path] = set()
-        if plan.parent_output and plan.parent_output.is_file():
+        if (
+            config.context.include_parent_docs
+            and plan.parent_output
+            and plan.parent_output.is_file()
+        ):
             generated_paths.add(plan.parent_output)
         if plan.output.is_file():
             generated_paths.add(plan.output)
@@ -605,11 +602,6 @@ def _existing_metadata(path: Path) -> dict[str, object]:
 
 def _within(path: str, directory: str) -> bool:
     return directory == "." or path == directory or path.startswith(directory + "/")
-
-
-def _parent_module_path(path: str) -> str:
-    parent = PurePosixPath(path).parent.as_posix()
-    return "." if parent == "." else parent
 
 
 def _slug(value: str) -> str:

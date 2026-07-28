@@ -1,180 +1,253 @@
 # Ariadne Current State
 
 Phase 2 (LLM Integration and Documentation Generation) is complete. Ariadne
-can inspect repositories as in Phase 1 and can now generate module-level
-Markdown through an OpenAI-compatible model endpoint.
+retains the deterministic Phase 1 inspection pipeline and can now generate one
+Markdown document per logical module through an OpenAI-compatible model
+endpoint.
 
 ## Current Architecture
 
-Discovery remains deterministic and model-independent:
+The package remains a small `src/ariadne` application with immutable dataclasses
+as its main boundaries:
 
-1. `ariadne.config` loads typed repository, module, model, context, and
-   generation settings from `.ariadne/config.yaml`.
-2. `ariadne.inspection.inspect_repository()` resolves and scans the selected
-   repository subtree and constructs the immutable logical module tree.
-3. `ariadne.generation` plans a stateless top-down traversal, assembles bounded
-   context, prompts the model, adds deterministic provenance, validates the
-   result, and persists it atomically.
-4. `ariadne.llm` defines the provider-neutral request/response protocol and the
-   OpenAI-compatible chat-completions reference backend.
-5. `ariadne.cli` exposes both `ariadne inspect` and `ariadne weave`.
+1. `ariadne.config` discovers, initializes, parses, and validates the aggregate
+   `AriadneConfig`. Repository, module, model, context, and generation settings
+   are separate frozen configuration records.
+2. `ariadne.repository`, `ariadne.git`, `ariadne.scanner`, and
+   `ariadne.modules` implement deterministic Phase 1 discovery.
+   `inspect_repository()` remains the boundary that returns repository context,
+   physical nodes, ignored paths, and the logical module tree.
+3. `ariadne.llm` defines the provider-neutral `LLMBackend` protocol,
+   request/response records, classified model errors, and the synchronous
+   OpenAI-compatible `/chat/completions` reference adapter.
+4. `ariadne.generation` plans the top-down module order, assembles bounded
+   evidence, builds prompts, invokes the backend, composes provenance,
+   validates Markdown structure, and persists documents.
+5. `ariadne.cli` exposes `inspect` and `weave`. `ariadne.render` formats the
+   inspection hierarchy and planned-document count. Weave progress is emitted
+   through callbacks and rendered on stderr; generated paths remain on stdout.
 
-Discovery models remain repository-relative and immutable. The model backend
-receives only assembled text; it has no filesystem access and no retrieval
-tools.
+The model backend receives only constructed prompts. It does not access the
+repository filesystem or control traversal.
 
-Inspection reports the number of logical modules, which is also the number of
-documentation files planned for a subtree weave.
-
-## Model Abstraction
-
-`LLMBackend.generate()` accepts separate system and user prompts and returns
-generated text plus the serving model name. The included
-`OpenAICompatibleBackend` sends `/v1/chat/completions` requests with configured
-model, output-token limit, temperature, timeout, and arbitrary string headers.
-It classifies authentication, timeout, connection, rate-limit, context-length,
-server, and malformed-response failures.
-
-The payload intentionally uses the common OpenAI chat-completions shape used by
-vLLM OpenAI-compatible servers. Tests mock the HTTP transport; no running model
-is required.
-
-The adapter accepts both string content and structured text-part content.
-Incompatible responses identify the expected
-`choices[0].message.content` shape without echoing response bodies or endpoint
-query parameters. It uses Python's standard HTTP library to keep the core
-dependency-light and avoid coupling the provider-neutral interface to one
-vendor SDK. A future SDK-backed provider can implement the same `LLMBackend`
-contract when its response normalization or authentication support provides a
-concrete benefit.
-
-## Context and Evidence Policy
-
-The Context Assembler supplies repository identity and commit, module location,
-ancestors and children, a bounded directory tree, selected file contents,
-context omissions, and available hierarchical documentation.
-
-Evidence is labeled in the prompt:
-
-- source, manifests, and configuration are primary evidence;
-- human-authored documentation is secondary evidence;
-- prior `*-genai-doc.md` documents are unverified, potentially stale secondary
-  evidence.
-
-Generated documents are excluded from physical source scanning so they cannot
-change module boundaries, language totals, or source-size totals. When enabled,
-the assembler reads relevant prior generated documents separately and instructs
-the model never to prefer them over source evidence.
-
-File selection is deterministic. Manifests and configuration lead entry points,
-source, human documentation, tests, miscellaneous text, and finally generated
-documentation. Binary files are omitted, individual files are size-bounded,
-and a stable character-to-token estimate bounds the overall initial prompt.
-Truncations and omissions are disclosed to the model.
-
-For leaf modules, prompt construction asks the model to consider additional
-evidence-grounded detail about sibling files in the leaf, including how they
-divide responsibilities and collaborate, without reverting to file-by-file
-paraphrase.
-
-## Documentation Pipeline
-
-`ariadne weave [path]` runs:
+The generation path is:
 
 ```text
 Discover -> Plan Top-Down -> Assemble Context -> Invoke Model
-         -> Add Provenance -> Validate -> Persist Atomically
+         -> Compose Provenance -> Validate -> Persist Atomically
 ```
 
-The selected module and descendants are generated sequentially by default.
-`--module-only` generates only the selection. A completed parent document is
-available to its children.
+## Implemented Features
 
-The orchestration layer emits initial and per-module progress events. The CLI
-renders these as progress bars on stderr while reserving stdout for generated
-document paths.
+### Discovery and planning
 
-If no configuration is discoverable, the first weave creates
-`.ariadne/config.yaml`, adds `.ariadne/` to the repository `.gitignore`, and
-reports that the generated model settings should be reviewed. Model failures
-report the sanitized endpoint, configuration path, and corrective checks rather
-than only reporting a generic connection failure.
+- All Phase 1 repository discovery and `ariadne inspect [path]` behavior.
+- Deterministic logical-module ordering and top-down traversal.
+- Subtree generation by default and `--module-only` generation.
+- Planned documentation count in inspect output.
+- One deterministic filesystem-safe `*-genai-doc.md` destination per logical
+  module, including deterministic collision disambiguation.
+- Repository-wide generation when `weave` is invoked without a path.
 
-Each module receives one deterministic filesystem-safe `*-genai-doc.md` file in
-its physical directory. Collisions are disambiguated before model invocation.
-The harness, rather than the model, adds YAML front matter and the visible
-AI-generated disclaimer. Validation requires complete provenance, exactly one
-level-one title, and nonempty Markdown. Temporary files are flushed and
-atomically replaced only after validation.
+### Configuration and model abstraction
 
-Existing Ariadne-generated documents may be replaced. Documents marked
-human-reviewed or human-modified, and files without Ariadne provenance, are
-protected unless `--force` is supplied.
+- Typed aggregate configuration for repository, modules, model, context, and
+  generation behavior.
+- First-weave creation of `.ariadne/config.yaml` and addition of `.ariadne/` to
+  `.gitignore`.
+- Configurable OpenAI-compatible endpoint, model, context window, output limit,
+  temperature, timeout, and arbitrary string headers.
+- Provider-neutral model request/response protocol.
+- OpenAI-compatible chat-completions HTTP adapter with string and structured
+  text-part response support.
+- Model error classification for authentication, timeout, connection,
+  rate-limit, context-length, server, and invalid-response failures.
+- Sanitized endpoint diagnostics that do not expose configured headers,
+  endpoint query parameters, or response bodies.
+- Mocked transport coverage for the request/response shape used by common vLLM
+  OpenAI-compatible servers.
 
-## Configuration
+### Context and prompting
 
-Phase 2 recognizes these sections in addition to Phase 1 settings:
+- Repository identity, root, source commit when available, module location,
+  ancestor names, languages, child modules, and bounded local tree context.
+- Deterministic file selection prioritizing manifests/configuration, entry
+  points, source, human documentation, tests, miscellaneous text, and prior
+  generated documentation.
+- Per-file byte limits and a stable character-to-token estimate for the total
+  initial-context budget.
+- Binary-content omission, large-file truncation, and explicit omission notes.
+- Evidence labels:
+  - source/configuration as primary evidence;
+  - human-authored documentation as secondary evidence;
+  - prior generated documentation as unverified, potentially stale evidence.
+- Optional inclusion of the current prior document, ancestor documents, and the
+  exact traversal-parent document.
+- Prompt instructions for source grounding, uncertainty, concrete files and
+  symbols, flexible document structure, and leaf-level sibling-file detail.
+- Generated documents remain excluded from source discovery, module boundaries,
+  language totals, and source-size totals.
 
-```yaml
-model:
-  provider: openai-compatible
-  model: local-model
-  endpoint: http://localhost:8000/v1
-  context_window: 32768
-  max_output_tokens: 6000
-  temperature: 0.2
-  timeout_seconds: 300
-  headers: {}
+### Generation, provenance, validation, and persistence
 
-context:
-  max_initial_tokens: 24000
-  max_file_bytes: 100000
-  max_tree_depth: 3
-  include_parent_docs: true
-  include_generated_docs: true
-  characters_per_token: 4.0
+- Sequential model invocation with generated parent context available to
+  descendants.
+- Harness-owned YAML front matter and visible AI-generation disclaimer.
+- Generation timestamp, Ariadne version, model, logical module, source commit
+  when available, status, and human-review/modification metadata.
+- Lightweight validation for nonempty output, parseable front matter, required
+  provenance, the AI disclaimer, and exactly one nonempty level-one title.
+- Validation before destination replacement and an existence check afterward.
+- Temporary-file creation in the destination directory, flush, `fsync`, and
+  atomic replacement.
+- Protection for non-Ariadne, human-reviewed, and human-modified documents,
+  with explicit `--force` override.
+- Module-based progress events that advance after successful validation and
+  persistence.
+- Actionable configuration and model-connection errors.
 
-generation:
-  output_suffix: -genai-doc.md
-  include_front_matter: true
-  atomic_writes: true
-  overwrite_generated: true
-  overwrite_human_modified: false
-```
+## Milestone Status
 
-Headers are passed to the configured endpoint and should be handled as secrets
-when they contain credentials. Ariadne does not print header values in model
-errors.
+The Phase 2 roadmap deliverables are fully implemented: model adapter, prompt
+template, top-down traversal, bounded local context, module-level documentation,
+provenance, deterministic names, atomic persistence, subtree operation, and the
+`ariadne weave path/to/module` command.
+
+The following specification areas are intentionally lightweight or partial:
+
+- Markdown validation checks the required structure but does not use a full
+  CommonMark parser or validate every link and repository-relative path.
+- Context budgeting uses a configurable character estimate rather than a
+  provider tokenizer.
+- Binary detection is based on NUL bytes and decoding uses UTF-8 replacement.
+- A selected subtree is discovered as its own logical root, so its prompt does
+  not reconstruct the full logical ancestor chain. Existing generated ancestor
+  documents may still be included as lower-confidence context.
+- vLLM compatibility is tested at the OpenAI-compatible wire-contract level
+  with a mocked transport; the suite does not require a live vLLM server.
+- Error classification is sufficient for single-attempt Phase 2 generation but
+  does not yet carry structured retryability, HTTP status, or attempt metadata.
+
+These limitations do not prevent the Phase 2 deliverable. Link verification,
+provider tokenization, richer recovery metadata, and robust failure handling
+belong to later milestones.
 
 ## Deferred Features
 
-The following remain intentionally outside Phase 2:
+Phase 3 intentionally owns:
 
-- retries, failure isolation, persistent run state, resume, and partial drafts;
+- persistent run state and manifests;
+- module failure isolation and run summaries;
+- retries, resume, partial drafts, and safe cleanup;
+- context-overflow recovery policies;
+- async model invocation and bounded dependency-aware concurrency;
+- cancellation and coordination of out-of-order progress/state updates.
+
+Later phases own:
+
 - retrieval tools, search, and model tool-call loops;
-- child-document refinement, bottom-up traversal, and a second pass;
+- bottom-up traversal, child-document refinement, second passes, and cross-links;
 - AST or dependency indexing;
-- Mermaid diagrams, navigation refinement, and a documentation website;
-- incremental regeneration, stale detection, and advanced source verification.
+- Mermaid diagrams, a documentation website, and rendered navigation;
+- incremental regeneration, source fingerprints, stale detection, and advanced
+  verification.
 
-Generation is sequential and stops at the first failed module. Token counts are
-estimated rather than calculated with a provider tokenizer.
+No file-level documentation is planned.
 
-## Recommendations for Phase 3
+## Important Extension Points
 
-1. Wrap the existing per-module pipeline with persistent run records rather
-   than adding state to discovery or context models.
-2. Record planned output paths, prompt-size estimates, model error kinds, and
-   atomic completion status before adding retry selection.
-3. Isolate module failures while retaining deterministic traversal order.
-4. Add retry and context-overflow policies around `LLMBackend.generate()`;
-   keep the backend itself single-attempt.
-5. Preserve human-modification protection during resume and cleanup.
+- `inspect_repository()` is the discovery boundary. Future generation behavior
+  should consume `InspectionResult` rather than add model concerns to scanning.
+- `plan_modules()` produces immutable `PlannedModule` records with exact parent
+  and output relationships. Phase 3 scheduling should consume this plan rather
+  than re-derive dependencies from filesystem paths.
+- `assemble_context()` is the evidence boundary. Missing-parent status, retry
+  context reductions, and later retrieval results should be represented here
+  without giving providers filesystem access.
+- `build_prompt()` owns the documentation contract and evidence instructions.
+  Retrieval/tool protocol instructions should be added compositionally in
+  Phase 4 rather than embedded in discovery.
+- `LLMBackend` is the provider boundary. Phase 3 is expected to make generation
+  asynchronous after comparing an established async HTTP client with an
+  OpenAI-compatible SDK. SDK-specific types must not leak through this protocol.
+- The current sequential loop in `weave_repository()` is the orchestration
+  boundary. Before adding concurrency, extract a single-planned-module executor
+  and wrap it with persistent state and failure isolation.
+- `validate_document()` and `persist_document()` are independent boundaries and
+  should remain outside provider adapters and run-state code.
+- `ModelErrorKind` is the starting point for retry selection. Phase 3 should add
+  structured attempt/status/retryability data without parsing human-readable
+  error messages.
+- Progress and configuration callbacks keep library code independent from CLI
+  rendering. Phase 3 should preserve that separation when state updates become
+  concurrent.
+
+## Technical Debt
+
+- `ariadne.generation` contains planning, context selection, prompting,
+  provenance, validation, persistence, and orchestration in one module. The
+  functions are individually small, but Phase 3 should separate the
+  per-module executor from run coordination before adding concurrency.
+- First-run configuration initialization performs one discovery pass to locate
+  the repository and a second pass after writing configuration. This is simple
+  and safe but duplicates work once per repository.
+- Context selection uses static filename priorities and may include descendant
+  source files in an ancestor module until the budget is exhausted. It is
+  deterministic but not semantic ranking.
+- Prompt budgeting reserves a fixed estimated overhead and does not count the
+  final serialized prompt with a provider tokenizer.
+- Markdown validation is intentionally structural and does not detect all
+  malformed Markdown, invalid links, path escapes, or unsupported protocol
+  leakage.
+- The OpenAI-compatible adapter uses synchronous `urllib`. Phase 3 plans an
+  async provider interface and should use an established async HTTP client
+  unless an SDK compatibility spike demonstrates clear value.
+- `ModelRequest` currently contains only system and user text. Tool definitions
+  and multi-turn/tool-call state remain deliberately absent until retrieval.
+- Configuration and generation errors are readable but not yet structured for
+  persistent retry decisions.
+- Test coverage is broad but no numeric coverage threshold is collected.
+
+None of this debt requires another Phase 2 feature. The parent-document setting
+and planned-parent relationship were corrected during close-out so Phase 3 can
+rely on them directly.
 
 ## Testing Status
 
-The suite covers all Phase 1 discovery behavior plus Phase 2 configuration,
-chat-completions/vLLM-compatible serialization, model error classification,
-context evidence and budgeting, prompt construction, traversal, naming and
-collision handling, provenance, validation, overwrite protection, atomic
-persistence, and fake-model CLI generation. Tests require no network service.
+The model-independent suite covers:
+
+- configuration discovery, initialization, defaults, validation, and headers;
+- Phase 1 root resolution, scanning, filtering, logical modules, collapsing,
+  inspect rendering, and fixture integrations;
+- top-down and module-only planning, naming, and collision disambiguation;
+- context evidence labels, generated-document treatment, parent-document
+  configuration, leaf guidance, and prompt construction;
+- OpenAI-compatible/vLLM-style payloads, structured response content, sanitized
+  diagnostics, and model error classification;
+- provenance composition and front-matter/title validation;
+- overwrite protection and atomic persistence;
+- subtree generation, parent context propagation, progress events, CLI output,
+  and model-error guidance using fake backends.
+
+Tests require no network service. One directory-symlink test may skip on Windows
+hosts where creating symlinks is unavailable. No numeric coverage metric is
+currently collected.
+
+## Recommendations for Phase 3
+
+1. Preserve `InspectionResult`, `PlannedModule`, context assembly, validation,
+   and persistence as stable Phase 2 boundaries.
+2. Extract the per-module execution body from `weave_repository()` before
+   introducing an async dependency scheduler.
+3. Add persistent state transitions around module attempts; do not place run
+   state on immutable discovery models.
+4. Evolve `LLMBackend.generate()` to an async provider-neutral operation after
+   the documented SDK-versus-generic-client compatibility spike.
+5. Keep `max_concurrency` at `1` by default and release children after their
+   parent attempt finishes, even when that attempt fails.
+6. Serialize or otherwise coordinate state/progress updates while retaining
+   deterministic final ordering.
+7. Extend model failures with structured retry and attempt metadata, then add
+   retry and context-overflow policies outside individual provider calls.
+8. Preserve atomic writes and human-modification protection across retry,
+   resume, cancellation, and cleanup.

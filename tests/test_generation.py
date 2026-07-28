@@ -23,6 +23,7 @@ from ariadne.inspection import inspect_repository
 from ariadne.llm import ModelError, ModelErrorKind, ModelRequest, ModelResponse
 from ariadne.models import (
     AriadneConfig,
+    ContextConfig,
     FilePolicy,
     InspectionResult,
     LogicalModule,
@@ -176,6 +177,72 @@ def test_prompt_adds_sibling_file_detail_guidance_only_for_leaf_modules(
     )
 
 
+def test_context_respects_parent_document_setting(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    parent = tmp_path / "repository-genai-doc.md"
+    parent.write_text("# Parent context\n", encoding="utf-8")
+    inspection = inspect_repository(
+        cwd=tmp_path,
+        path="src",
+        git_enabled=False,
+        file_policy=FilePolicy.ALL_NONIGNORED,
+    )
+    plan = PlannedModule(
+        inspection.root_module,
+        (),
+        parent,
+        tmp_path / "src" / "src-genai-doc.md",
+    )
+
+    included = assemble_context(inspection, plan, AriadneConfig())
+    excluded = assemble_context(
+        inspection,
+        plan,
+        AriadneConfig(
+            context=ContextConfig(include_parent_docs=False)
+        ),
+    )
+
+    assert any(item.path == "repository-genai-doc.md" for item in included.files)
+    assert all(item.path != "repository-genai-doc.md" for item in excluded.files)
+
+
+def test_context_truncates_large_files_and_omits_binary_files(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "large.py").write_text("abcdefghij", encoding="utf-8")
+    (tmp_path / "src" / "binary.bin").write_bytes(b"abc\x00def")
+    inspection = inspect_repository(
+        cwd=tmp_path,
+        path="src",
+        git_enabled=False,
+        file_policy=FilePolicy.ALL_NONIGNORED,
+    )
+    config = AriadneConfig(
+        context=ContextConfig(max_file_bytes=5)
+    )
+    context = assemble_context(
+        inspection,
+        PlannedModule(
+            inspection.root_module,
+            (),
+            None,
+            tmp_path / "src" / "src-genai-doc.md",
+        ),
+        config,
+    )
+
+    large = next(item for item in context.files if item.path == "src/large.py")
+    assert large.content == "abcde"
+    assert large.truncated
+    assert any(
+        omission == "- src/binary.bin: binary content omitted"
+        for omission in context.omissions
+    )
+
+
 def test_compose_and_validate_provenance() -> None:
     config = AriadneConfig()
     document = compose_document(
@@ -282,3 +349,35 @@ def test_weave_model_error_points_to_configuration(tmp_path: Path) -> None:
     assert str(config_path) in message
     assert "OpenAI-compatible chat-completions service" in message
     assert "model names and headers" in message
+
+
+def test_invalid_regeneration_preserves_existing_document(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    config_path = _config(tmp_path)
+    destination = tmp_path / "src" / "src-genai-doc.md"
+    existing = compose_document(
+        "# Existing Module\n\n## Summary\n\nKeep this document.",
+        config=AriadneConfig(),
+        module=LogicalModule("src", "src"),
+        generated_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+        source_commit_value=None,
+        model="previous-model",
+    )
+    destination.write_text(existing, encoding="utf-8")
+
+    class InvalidBackend:
+        def generate(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse("This response has no title.", "invalid-model")
+
+    with pytest.raises(ValidationError, match="level-one title"):
+        weave_repository(
+            cwd=tmp_path,
+            path="src",
+            config_path=config_path,
+            git_enabled=False,
+            module_only=True,
+            backend=InvalidBackend(),
+        )
+
+    assert destination.read_text(encoding="utf-8") == existing
