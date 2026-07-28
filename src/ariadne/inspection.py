@@ -21,7 +21,10 @@ def inspect_repository(
     file_policy: FilePolicy | None = None,
 ) -> InspectionResult:
     cwd = (cwd or Path.cwd()).resolve()
-    selected_config = config_path.resolve() if config_path else discover_config(cwd)
+    config_start = Path(root).resolve() if root else cwd
+    selected_config = (
+        config_path.resolve() if config_path else discover_config(config_start)
+    )
     ariadne_config = load_config(selected_config)
     config = ariadne_config.repository
     if file_policy is not None:

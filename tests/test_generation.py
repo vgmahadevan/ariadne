@@ -187,6 +187,7 @@ def test_weave_generates_subtree_and_module_only(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     backend = FakeBackend()
+    progress: list[tuple[int, int, str]] = []
 
     results = weave_repository(
         cwd=tmp_path,
@@ -195,11 +196,15 @@ def test_weave_generates_subtree_and_module_only(tmp_path: Path) -> None:
         git_enabled=False,
         backend=backend,
         now=lambda: datetime(2026, 7, 26, tzinfo=timezone.utc),
+        on_progress=lambda completed, total, module: progress.append(
+            (completed, total, module.physical_path)
+        ),
     )
 
     assert len(results) == 2
     assert all(item.output_path.is_file() for item in results)
     assert len(backend.requests) == 2
+    assert progress == [(0, 2, "src"), (1, 2, "src"), (2, 2, "src/child")]
     assert "prior AI-generated documentation; unverified" in (
         backend.requests[1].user_prompt
     )

@@ -23,6 +23,9 @@ Discovery models remain repository-relative and immutable. The model backend
 receives only assembled text; it has no filesystem access and no retrieval
 tools.
 
+Inspection reports the number of logical modules, which is also the number of
+documentation files planned for a subtree weave.
+
 ## Model Abstraction
 
 `LLMBackend.generate()` accepts separate system and user prompts and returns
@@ -81,6 +84,10 @@ Discover -> Plan Top-Down -> Assemble Context -> Invoke Model
 The selected module and descendants are generated sequentially by default.
 `--module-only` generates only the selection. A completed parent document is
 available to its children.
+
+The orchestration layer emits initial and per-module progress events. The CLI
+renders these as progress bars on stderr while reserving stdout for generated
+document paths.
 
 If no configuration is discoverable, the first weave creates
 `.ariadne/config.yaml`, adds `.ariadne/` to the repository `.gitignore`, and

@@ -14,11 +14,17 @@ Inspect the deterministic logical module hierarchy without invoking a model:
 ariadne inspect [path]
 ```
 
+The inspection output includes the number of module documentation files that a
+subsequent subtree weave will generate.
+
 Generate one `*-genai-doc.md` per module in a selected subtree:
 
 ```bash
 ariadne weave [path]
 ```
+
+While weaving, Ariadne writes module progress bars to stderr and keeps generated
+document paths on stdout for scripting.
 
 Use `--module-only` to generate only the selected module. Ariadne uses an
 OpenAI-compatible `/v1/chat/completions` endpoint configured in

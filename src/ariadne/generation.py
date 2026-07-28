@@ -86,9 +86,13 @@ def weave_repository(
     backend: LLMBackend | None = None,
     now: Callable[[], datetime] | None = None,
     on_config_created: Callable[[Path], None] | None = None,
+    on_progress: Callable[[int, int, LogicalModule], None] | None = None,
 ) -> tuple[GenerationResult, ...]:
     cwd = (cwd or Path.cwd()).resolve()
-    selected_config = config_path.resolve() if config_path else discover_config(cwd)
+    config_start = Path(root).resolve() if root else cwd
+    selected_config = (
+        config_path.resolve() if config_path else discover_config(config_start)
+    )
     if selected_config is None:
         initial_inspection = inspect_repository(
             cwd=cwd,
@@ -112,11 +116,13 @@ def weave_repository(
     selected_backend = backend or OpenAICompatibleBackend(config.model)
     plans = plan_modules(inspection, config, module_only=module_only)
     _check_collisions(plans)
+    if on_progress is not None:
+        on_progress(0, len(plans), plans[0].module)
     results: list[GenerationResult] = []
     generated: dict[str, Path] = {}
     clock = now or (lambda: datetime.now().astimezone())
     commit = source_commit(inspection)
-    for plan in plans:
+    for index, plan in enumerate(plans, start=1):
         parent_output = generated.get(_parent_module_path(plan.module.physical_path))
         effective_plan = PlannedModule(
             plan.module,
@@ -158,6 +164,8 @@ def weave_repository(
         results.append(
             GenerationResult(plan.module.physical_path, plan.output, response.model)
         )
+        if on_progress is not None:
+            on_progress(index, len(plans), plan.module)
     return tuple(results)
 
 
@@ -305,16 +313,21 @@ def build_prompt(context: ModuleContext) -> ModelRequest:
             "# Generation instructions",
             "- Explain the module's summary, responsibilities, operation, and organization.",
             "- Reference concrete files and symbols when supported by evidence.",
-            "- Describe parent, child, and external relationships when established.",
+            "- ONLY IF USEFUL: Describe parent, child, and external relationships if established.",
             "- Avoid file-by-file paraphrase and omit irrelevant sections.",
             "- State uncertainties instead of inventing intent.",
             "- Use repository-relative Markdown links.",
+            "- Surface important implementation details; e.g., describe and explain calculations in that module's domain",
+            "- Highlight assumptions made, unexpected findings, and surprising things that would be useful to a first time reader of the module",
+            "- Similarly, do not spend much time on facts that are implicitly obvious (e.g., a function called 'add_two_numbers()' adds two numbers)",
             "",
             "# Documentation contract",
             "Use a flexible selection of: Summary; Purpose and Responsibilities; "
             "How It Works; Architecture and Organization; Important Files and APIs; "
             "Data Flow; Dependencies and Relationships; Configuration and External "
-            "Interfaces; Uncertainties and Review Notes.",
+            "Interfaces; Uncertainties and Review Notes; Areas for Improvement.",
+            "You have A LOT of freedom with what sections to use, including ad hoc sections.",
+            "For Areas for Improvement, surface obvious problems like unintentionlly duplicated code, or critical issues that need attention. But be concise and don't just dump TODOs."
         ]
     )
     return ModelRequest(system, "\n".join(lines))

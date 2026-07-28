@@ -14,9 +14,27 @@ from .generation import (
 from .git import GitError
 from .inspection import inspect_repository
 from .llm import LLMBackend, ModelError
-from .models import FilePolicy
+from .models import FilePolicy, LogicalModule
 from .render import render_inspection
 from .repository import RepositoryError
+
+
+class _ProgressBar:
+    width = 24
+
+    def update(
+        self, completed: int, total: int, module: LogicalModule
+    ) -> None:
+        ratio = completed / total if total else 1.0
+        filled = min(self.width, int(ratio * self.width))
+        bar = "#" * filled + "-" * (self.width - filled)
+        percent = int(ratio * 100)
+        state = "starting" if completed == 0 else module.physical_path
+        print(
+            f"ariadne: weaving [{bar}] {completed}/{total} "
+            f"({percent:3d}%) {state}",
+            file=sys.stderr,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,6 +97,7 @@ def main(
         selected_policy = FilePolicy.TRACKED_AND_UNTRACKED
     try:
         if args.command == "weave":
+            progress = _ProgressBar()
             generated = weave_repository(
                 path=args.path,
                 config_path=args.config,
@@ -93,6 +112,7 @@ def main(
                     "review the model endpoint before retrying",
                     file=sys.stderr,
                 ),
+                on_progress=progress.update,
             )
             for item in generated:
                 print(item.output_path)

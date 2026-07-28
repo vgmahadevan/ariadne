@@ -4,11 +4,13 @@ from .models import InspectionResult, LogicalModule
 
 
 def render_inspection(result: InspectionResult, verbosity: int = 0) -> str:
+    document_count = _count_modules(result.root_module)
     if verbosity <= 0:
         lines: list[str] = []
         _render_module(
             result.root_module, lines, prefix="", last=True, verbosity=0
         )
+        lines.extend(["", f"Documentation files to generate: {document_count}"])
         return "\n".join(lines) + "\n"
 
     lines = ["Logical modules:"]
@@ -35,6 +37,7 @@ def render_inspection(result: InspectionResult, verbosity: int = 0) -> str:
         )
     else:
         lines.append("  (none)")
+    lines.extend(["", f"Documentation files to generate: {document_count}"])
     return "\n".join(lines) + "\n"
 
 
@@ -82,3 +85,7 @@ def _format_bytes(size: int) -> str:
     if size < 1024 * 1024:
         return f"{size / 1024:.1f} KiB"
     return f"{size / (1024 * 1024):.1f} MiB"
+
+
+def _count_modules(module: LogicalModule) -> int:
+    return 1 + sum(_count_modules(child) for child in module.children)

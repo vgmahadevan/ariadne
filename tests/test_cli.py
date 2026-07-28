@@ -32,6 +32,7 @@ def test_inspect_command_defaults_to_names_only(
     assert "path=" not in captured.out
     assert "languages=" not in captured.out
     assert "Ignored" not in captured.out
+    assert "Documentation files to generate: 2" in captured.out
     assert captured.err == ""
 
 
@@ -91,3 +92,5 @@ def test_weave_command_uses_injected_model_and_writes_document(
     assert (tmp_path / ".ariadne" / "config.yaml").is_file()
     assert ".ariadne/" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert "created default configuration" in captured.err
+    assert "weaving [------------------------] 0/1" in captured.err
+    assert "weaving [########################] 1/1 (100%)" in captured.err
