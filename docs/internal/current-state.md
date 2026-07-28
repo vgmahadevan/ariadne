@@ -72,6 +72,11 @@ documentation. Binary files are omitted, individual files are size-bounded,
 and a stable character-to-token estimate bounds the overall initial prompt.
 Truncations and omissions are disclosed to the model.
 
+For leaf modules, prompt construction asks the model to consider additional
+evidence-grounded detail about sibling files in the leaf, including how they
+divide responsibilities and collaborate, without reverting to file-by-file
+paraphrase.
+
 ## Documentation Pipeline
 
 `ariadne weave [path]` runs:

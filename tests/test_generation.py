@@ -137,6 +137,45 @@ def test_context_labels_generated_docs_as_unverified(tmp_path: Path) -> None:
     }
 
 
+def test_prompt_adds_sibling_file_detail_guidance_only_for_leaf_modules(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "first.py").write_text("FIRST = 1\n", encoding="utf-8")
+    (tmp_path / "src" / "second.py").write_text("SECOND = 2\n", encoding="utf-8")
+    inspection = inspect_repository(
+        cwd=tmp_path,
+        path="src",
+        git_enabled=False,
+        file_policy=FilePolicy.ALL_NONIGNORED,
+    )
+    output = tmp_path / "src" / "src-genai-doc.md"
+    leaf_context = assemble_context(
+        inspection,
+        PlannedModule(inspection.root_module, (), None, output),
+        AriadneConfig(),
+    )
+
+    assert "additional detail about the sibling files" in (
+        build_prompt(leaf_context).user_prompt
+    )
+
+    parent = LogicalModule(
+        "src",
+        "src",
+        children=(LogicalModule("child", "src/child"),),
+    )
+    parent_context = assemble_context(
+        inspection,
+        PlannedModule(parent, (), None, output),
+        AriadneConfig(),
+    )
+
+    assert "additional detail about the sibling files" not in (
+        build_prompt(parent_context).user_prompt
+    )
+
+
 def test_compose_and_validate_provenance() -> None:
     config = AriadneConfig()
     document = compose_document(

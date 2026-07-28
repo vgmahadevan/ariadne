@@ -307,6 +307,15 @@ def build_prompt(context: ModuleContext) -> ModelRequest:
         )
     if context.omissions:
         lines.extend(["", "# Context omissions", *context.omissions])
+    leaf_guidance = []
+    if not context.module.children:
+        leaf_guidance = [
+            "- This is a leaf module. Consider giving additional detail about "
+            "the sibling files located together here: explain how they divide "
+            "responsibilities, collaborate, and form the local implementation. "
+            "Do this only where the supplied evidence supports useful detail, "
+            "and do not fall back to file-by-file paraphrase."
+        ]
     lines.extend(
         [
             "",
@@ -320,6 +329,7 @@ def build_prompt(context: ModuleContext) -> ModelRequest:
             "- Surface important implementation details; e.g., describe and explain calculations in that module's domain",
             "- Highlight assumptions made, unexpected findings, and surprising things that would be useful to a first time reader of the module",
             "- Similarly, do not spend much time on facts that are implicitly obvious (e.g., a function called 'add_two_numbers()' adds two numbers)",
+            *leaf_guidance,
             "",
             "# Documentation contract",
             "Use a flexible selection of: Summary; Purpose and Responsibilities; "
