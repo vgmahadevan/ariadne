@@ -697,6 +697,26 @@ ariadne weave services/payments
 
 The selected module should still receive enough ancestor context to understand its place in the repository.
 
+### 11.6 Concurrent top-down scheduling
+
+Top-down traversal defines an ancestry dependency, not a requirement that the
+entire weave run sequentially.
+
+A module becomes eligible when its parent attempt finishes:
+
+- after parent success, use the newly persisted parent documentation;
+- after parent failure, continue without new parent documentation and record
+  the omission in context;
+- do not mark or report descendants as blocked or skipped solely because their
+  parent failed.
+
+Eligible siblings and independent branches may be generated concurrently.
+Scheduling should not impose a whole-depth barrier: a completed module may
+release its children without waiting for every sibling at the same depth.
+
+The sequential order remains the deterministic planning and reporting order,
+even when actual completion order differs.
+
 ---
 
 ## 12. Generation Pipeline
@@ -908,6 +928,11 @@ A context overflow should not crash the entire weave.
 
 The LLM interface should be provider-agnostic.
 
+The model-generation operation should be asynchronous so the harness can keep
+multiple independent requests in flight without dedicating one operating-system
+thread per request. Synchronous providers may be adapted internally, but should
+not force the orchestration interface to become synchronous.
+
 Possible adapters:
 
 - OpenAI-compatible local server;
@@ -967,6 +992,37 @@ Defaults should use:
 The model must not include internal tool protocol or hidden harness metadata in final documentation.
 
 Validation should detect obvious leakage.
+
+### 14.6 Client library boundary
+
+Ariadne should not implement raw HTTP protocol handling itself. An adapter may
+use either:
+
+- a mature async model SDK; or
+- a thin adapter over a general-purpose async HTTP client.
+
+The baseline Phase 3 implementation direction is a small Ariadne-owned adapter
+over an established async HTTP client. Ariadne's required wire surface is
+currently narrow, and an OpenAI SDK does not protect against a server that
+departs from the advertised OpenAI-compatible protocol. A compatibility spike
+should still compare that baseline with a mature async model SDK. Evaluate:
+
+- configurable base URLs for local and OpenAI-compatible servers;
+- verified vLLM compatibility;
+- arbitrary request headers and authentication;
+- connection pooling and cancellation;
+- timeout behavior and Ariadne-controlled retry semantics;
+- response normalization and useful error classification;
+- dependency weight and release stability;
+- testability without a running model;
+- absence of SDK-specific types in Ariadne's public model interface.
+
+Adopt an SDK only when it provides concrete normalization or operational
+benefits beyond the generic client. It must not introduce hidden retries,
+require a hosted provider, or prevent custom local endpoints. Otherwise, retain
+the Ariadne-owned wire adapter. In either case, connection pooling and
+cancellation should come from the selected library rather than custom network
+protocol code.
 
 ---
 
@@ -1596,6 +1652,16 @@ On failure:
 5. continue with the next module;
 6. include the failure in the final summary.
 
+After recording the failure, release the failed module's children for
+generation. Their context must state that newly generated parent documentation
+was unavailable. They may still use repository context and any valid prior
+parent document according to the configured generated-document evidence policy.
+A parent failure alone must not classify descendants as blocked or skipped.
+
+With concurrent generation, unrelated in-flight tasks should normally finish.
+Failure recording, progress counters, and persistent state updates must remain
+consistent when tasks complete out of planning order.
+
 ### 22.4 Partial drafts
 
 If a model produced useful but incomplete Markdown, Ariadne may save a draft artifact.
@@ -2102,6 +2168,7 @@ generation:
   overwrite_human_modified: false
   include_front_matter: true
   atomic_writes: true
+  max_concurrency: 1
 
 model:
   provider: openai-compatible
@@ -2229,6 +2296,7 @@ Potential common flags:
 --disable-diagrams
 --max-tool-calls <n>
 --model <name>
+--max-concurrency <n>
 --resume
 --force
 ```
@@ -2403,15 +2471,44 @@ Any future dynamic-analysis feature must be separately sandboxed and opt-in.
 
 ### 35.1 Sequential default
 
-The default should be conservative sequential processing, especially when one local model server is available.
+The default should be conservative sequential processing with:
+
+```yaml
+generation:
+  max_concurrency: 1
+```
+
+This is especially important when one memory-constrained local model server is
+available.
 
 ### 35.2 Parallelism
 
-Optional concurrency may be supported when:
+Phase 3 should add bounded async concurrency when:
 
 - multiple model workers exist;
 - modules are independent;
 - resource limits are configured.
+
+`max_concurrency` limits active model requests, not the number of discovered
+modules or orchestration tasks. The CLI may provide a corresponding
+`--max-concurrency` override.
+
+The scheduler should:
+
+1. begin with the selected root;
+2. release children as soon as their parent attempt finishes;
+3. run eligible siblings and independent branches concurrently;
+4. continue descendants after parent failure with explicit missing-parent
+   context;
+5. preserve atomic per-module writes;
+6. serialize or otherwise safely coordinate run-state and progress updates;
+7. retain deterministic final summaries and result ordering;
+8. stop launching new work on cancellation while safely settling or cancelling
+   in-flight requests.
+
+Parallelism should improve throughput only when the configured model service can
+support concurrent requests. Increasing concurrency must remain optional and
+independently disableable.
 
 ### 35.3 Caching
 
@@ -2610,11 +2707,19 @@ Implement:
 - run summary;
 - retry;
 - resume;
-- safe clean.
+- safe clean;
+- async provider-neutral model invocation;
+- bounded dependency-aware parallel generation;
+- configurable concurrency with a sequential default;
+- progress and state coordination for out-of-order completion;
+- graceful cancellation of in-flight model requests;
+- an async client compatibility spike covering SDK and generic HTTP options.
 
 Deliverable:
 
-A full repository run can finish despite module failures.
+A full repository run can finish despite module failures. Eligible siblings and
+independent branches may run concurrently, and descendants continue when a
+parent fails.
 
 ### Phase 4: Retrieval
 

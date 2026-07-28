@@ -71,8 +71,26 @@ Implement:
 * resume
 * safe cleanup
 * context-overflow handling
+* async model invocation
+* bounded parallel generation across eligible modules
+* configurable concurrency with a sequential default
+* deterministic progress and result reporting despite out-of-order completion
+* graceful cancellation of in-flight work
 
 A failed module must never stop the overall weave.
+
+Top-down context remains ordered by ancestry: a module becomes eligible after
+its parent attempt finishes. If the parent fails, descendants still run without
+new parent documentation and record that omission in their context. Siblings
+and independent branches may run concurrently.
+
+Before selecting an LLM client dependency, evaluate an async OpenAI-compatible
+SDK against a thin adapter over an established generic async HTTP client. The
+generic adapter is the baseline direction because Ariadne currently needs only
+a small request and response surface. The provider-neutral Ariadne interface
+must not expose SDK-specific types. Adopt an SDK only if it demonstrably
+improves vLLM compatibility, response normalization, authentication, and error
+handling without introducing hidden retry or provider coupling.
 
 ---
 
