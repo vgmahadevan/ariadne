@@ -14,7 +14,7 @@ def test_bare_command_prints_usage_without_error(capsys) -> None:
 
     captured = capsys.readouterr()
     assert status == 0, captured.err
-    assert captured.out == "usage: ariadne [-h] {inspect,weave} ...\n"
+    assert captured.out == "usage: ariadne [-h] {inspect,weave,clean} ...\n"
     assert captured.err == ""
 
 
@@ -94,3 +94,42 @@ def test_weave_command_uses_injected_model_and_writes_document(
     assert "created default configuration" in captured.err
     assert "weaving [------------------------] 0/1" in captured.err
     assert "weaving [########################] 1/1 (100%)" in captured.err
+
+
+def test_clean_command_dry_run_then_removes_generated_document(
+    tmp_path: Path, capsys
+) -> None:
+    (tmp_path / "src").mkdir()
+    destination = tmp_path / "src" / "src-genai-doc.md"
+    status = main(
+        [
+            "weave", str(tmp_path / "src"), "--root", str(tmp_path), "--no-git",
+            "--include-untracked", "--module-only",
+        ],
+        backend=CliFakeBackend(),
+    )
+    assert status == 0
+    capsys.readouterr()
+
+    status = main(
+        [
+            "clean", str(tmp_path / "src"), "--root", str(tmp_path), "--no-git",
+            "--dry-run",
+        ]
+    )
+    preview = capsys.readouterr()
+    assert status == 0
+    assert str(destination) in preview.out
+    assert "would remove 1 generated artifact(s)" in preview.err
+    assert destination.exists()
+
+    status = main(
+        [
+            "clean", str(tmp_path / "src"), "--root", str(tmp_path), "--no-git",
+        ]
+    )
+    removed = capsys.readouterr()
+    assert status == 0
+    assert str(destination) in removed.out
+    assert "removed 1 generated artifact(s)" in removed.err
+    assert not destination.exists()

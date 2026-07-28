@@ -422,7 +422,7 @@ def persist_document(
 ) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
-        metadata = _existing_metadata(destination)
+        metadata = read_document_metadata(destination)
         provenance = metadata.get("ariadne", {})
         if not isinstance(provenance, dict):
             provenance = {}
@@ -588,7 +588,7 @@ def _evidence(node: PhysicalNode) -> str:
     return "source/configuration; primary evidence"
 
 
-def _existing_metadata(path: Path) -> dict[str, object]:
+def read_document_metadata(path: Path) -> dict[str, object]:
     try:
         text = path.read_text(encoding="utf-8")
         if not text.startswith("---\n"):

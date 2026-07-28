@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .cleanup import clean_repository
 from .config import ConfigurationError
 from .generation import (
     GenerationError,
@@ -77,6 +78,28 @@ def build_parser() -> argparse.ArgumentParser:
     weave_policy = weave_parser.add_mutually_exclusive_group()
     weave_policy.add_argument("--tracked-only", action="store_true")
     weave_policy.add_argument("--include-untracked", action="store_true")
+    clean_parser = subparsers.add_parser(
+        "clean", help="safely remove Ariadne-generated documentation"
+    )
+    clean_parser.add_argument("path", nargs="?")
+    clean_parser.add_argument("--config", type=Path)
+    clean_parser.add_argument("--root")
+    clean_parser.add_argument("--no-git", action="store_true")
+    clean_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list generated artifacts without removing them",
+    )
+    clean_parser.add_argument(
+        "--include-human-modified",
+        action="store_true",
+        help="also remove generated documents marked as human-reviewed or modified",
+    )
+    clean_parser.add_argument(
+        "--drafts",
+        action="store_true",
+        help="also remove Ariadne partial drafts for the selected subtree",
+    )
     return parser
 
 
@@ -91,11 +114,29 @@ def main(
         parser.print_usage()
         return 0
     selected_policy = None
-    if args.tracked_only:
+    if getattr(args, "tracked_only", False):
         selected_policy = FilePolicy.TRACKED_ONLY
-    elif args.include_untracked:
+    elif getattr(args, "include_untracked", False):
         selected_policy = FilePolicy.TRACKED_AND_UNTRACKED
     try:
+        if args.command == "clean":
+            result = clean_repository(
+                path=args.path,
+                config_path=args.config,
+                root=args.root,
+                git_enabled=not args.no_git,
+                dry_run=args.dry_run,
+                include_human_modified=args.include_human_modified,
+                include_drafts=args.drafts,
+            )
+            for item in result.paths:
+                print(item)
+            action = "would remove" if args.dry_run else "removed"
+            print(
+                f"ariadne: {action} {len(result.paths)} generated artifact(s)",
+                file=sys.stderr,
+            )
+            return 0
         if args.command == "weave":
             progress = _ProgressBar()
             generated = weave_repository(
