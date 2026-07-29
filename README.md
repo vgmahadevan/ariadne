@@ -26,6 +26,8 @@ ariadne weave [path]
 While weaving, Ariadne writes module progress bars to stderr and keeps generated
 document paths on stdout for scripting. A weave continues after individual
 module failures and exits with status 1 after printing its complete summary.
+The progress bar updates in place and reports elapsed and estimated remaining
+time; the final summary includes total elapsed time.
 
 Interrupted or partially failed runs can be reconciled and resumed:
 
@@ -33,8 +35,8 @@ Interrupted or partially failed runs can be reconciled and resumed:
 ariadne weave [path] --resume
 ```
 
-Independent eligible branches can run concurrently. The conservative default
-is one active model request:
+Independent eligible branches can run concurrently. The default allows up to
+eight active model requests:
 
 ```bash
 ariadne weave [path] --max-concurrency 4
@@ -67,7 +69,7 @@ model:
   timeout_seconds: 300
   headers: {}
 generation:
-  max_concurrency: 1
+  max_concurrency: 8
 ```
 
 The same request shape is compatible with common vLLM OpenAI servers. Generated

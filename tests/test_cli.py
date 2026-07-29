@@ -1,7 +1,10 @@
+import io
 from pathlib import Path
 
-from ariadne.cli import main
+from ariadne.cli import _ProgressBar, main
+from ariadne.generation import ProgressEvent
 from ariadne.llm import ModelResponse
+from ariadne.models import LogicalModule
 
 
 class CliFakeBackend:
@@ -97,8 +100,13 @@ def test_weave_command_uses_injected_model_and_writes_document(
     assert (tmp_path / ".ariadne" / "config.yaml").is_file()
     assert ".ariadne/" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert "created default configuration" in captured.err
+    assert "weaving [------------------------] 0/1 (0%)" in captured.err
     assert "weaving [########################] 1/1 (100%)" in captured.err
+    assert " elapsed, " in captured.err
+    assert " remaining]" in captured.err
+    assert "\r" in captured.err
     assert "weave complete: generated=1" in captured.err
+    assert "elapsed=" in captured.err
 
 
 def test_clean_command_dry_run_then_removes_generated_document(
@@ -156,3 +164,22 @@ def test_weave_returns_partial_failure_exit_code(tmp_path: Path, capsys) -> None
     assert status == 1
     assert "partial=1" in captured.err
     assert "validation" in captured.err
+
+
+def test_progress_bar_updates_in_place_with_elapsed_time_and_eta() -> None:
+    current = 0.0
+    stream = io.StringIO()
+    progress = _ProgressBar(clock=lambda: current, stream=stream)
+    module = LogicalModule("src", "src")
+
+    progress.update(ProgressEvent(0, 2, module, "pending"))
+    current = 10.0
+    progress.update(ProgressEvent(1, 2, module, "generated"))
+    elapsed = progress.finish()
+
+    rendered = stream.getvalue()
+    assert rendered.count("\r") == 2
+    assert rendered.count("\n") == 1
+    assert "0/2" in rendered
+    assert "[00:10 elapsed, 00:10 remaining]" in rendered
+    assert elapsed == 10.0

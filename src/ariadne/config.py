@@ -47,7 +47,7 @@ generation:
   atomic_writes: true
   overwrite_generated: true
   overwrite_human_modified: false
-  max_concurrency: 1
+  max_concurrency: 8
 """
 
 
@@ -183,7 +183,7 @@ def load_config(path: Path | None) -> AriadneConfig:
             overwrite_human_modified=_boolean(
                 generation, "overwrite_human_modified", False
             ),
-            max_concurrency=_positive_int(generation, "max_concurrency", 1),
+            max_concurrency=_positive_int(generation, "max_concurrency", 8),
         ),
     )
 

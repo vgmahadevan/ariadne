@@ -56,7 +56,7 @@ class GenerationConfig:
     atomic_writes: bool = True
     overwrite_generated: bool = True
     overwrite_human_modified: bool = False
-    max_concurrency: int = 1
+    max_concurrency: int = 8
 
 
 @dataclass(frozen=True)

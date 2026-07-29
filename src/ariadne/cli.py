@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import time
 from pathlib import Path
+from typing import Callable, TextIO
 
 from .cleanup import clean_repository
 from .config import ConfigurationError
@@ -27,22 +29,64 @@ from .state import StateError
 class _ProgressBar:
     width = 24
 
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        stream: TextIO | None = None,
+    ) -> None:
+        self._clock = clock
+        self._stream = stream or sys.stderr
+        self._started_at = clock()
+        self._last_width = 0
+        self._rendered = False
+
     def update(self, event: ProgressEvent) -> None:
         completed = event.index
         total = event.total
         module = event.module
+        elapsed = self._clock() - self._started_at
         ratio = completed / total if total else 1.0
         filled = min(self.width, int(ratio * self.width))
         bar = "#" * filled + "-" * (self.width - filled)
         percent = int(ratio * 100)
-        detail = event.status
+        detail = "starting" if completed == 0 else event.status
         if event.error_kind:
             detail = f"{detail}: {event.error_kind}"
-        print(
+        eta = None
+        if completed:
+            eta = max(0.0, elapsed / completed * (total - completed))
+        line = (
             f"ariadne: weaving [{bar}] {completed}/{total} "
-            f"({percent:3d}%) {module.physical_path} - {detail}",
-            file=sys.stderr,
+            f"({percent}%) "
+            f"[{_format_duration(elapsed)} elapsed, "
+            f"{_format_duration(eta) if eta is not None else '--:--'} remaining] "
+            f"{module.physical_path} - {detail}"
         )
+        padding = " " * max(0, self._last_width - len(line))
+        self._stream.write(f"\r{line}{padding}")
+        self._stream.flush()
+        self._last_width = len(line)
+        self._rendered = True
+
+    def finish(self) -> float:
+        elapsed = self._clock() - self._started_at
+        if self._rendered:
+            self._stream.write("\n")
+            self._stream.flush()
+            self._rendered = False
+        return elapsed
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "--:--"
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -156,26 +200,29 @@ def main(
             return 0
         if args.command == "weave":
             progress = _ProgressBar()
-            generated = asyncio.run(
-                weave_repository(
-                    path=args.path,
-                    config_path=args.config,
-                    root=args.root,
-                    git_enabled=not args.no_git,
-                    file_policy=selected_policy,
-                    module_only=args.module_only,
-                    force=args.force,
-                    resume=args.resume,
-                    max_concurrency=args.max_concurrency,
-                    backend=backend,
-                    on_config_created=lambda path: print(
-                        f"ariadne: created default configuration at {path}; "
-                        "review the model endpoint before retrying",
-                        file=sys.stderr,
+            try:
+                generated = asyncio.run(
+                    weave_repository(
+                        path=args.path,
+                        config_path=args.config,
+                        root=args.root,
+                        git_enabled=not args.no_git,
+                        file_policy=selected_policy,
+                        module_only=args.module_only,
+                        force=args.force,
+                        resume=args.resume,
+                        max_concurrency=args.max_concurrency,
+                        backend=backend,
+                        on_config_created=lambda path: print(
+                            f"ariadne: created default configuration at {path}; "
+                            "review the model endpoint before retrying",
+                            file=sys.stderr,
+                        ),
+                        on_progress=progress.update,
                     ),
-                    on_progress=progress.update,
-                ),
-            )
+                )
+            finally:
+                elapsed = progress.finish()
             for item in generated.successful:
                 print(item.output_path)
             summary = generated.summary
@@ -183,7 +230,8 @@ def main(
                 "ariadne: weave complete: "
                 f"generated={summary.generated} updated={summary.updated} "
                 f"failed={summary.failed} partial={summary.partial} "
-                f"cancelled={summary.cancelled}",
+                f"cancelled={summary.cancelled} "
+                f"elapsed={_format_duration(elapsed)}",
                 file=sys.stderr,
             )
             for item in generated.modules:

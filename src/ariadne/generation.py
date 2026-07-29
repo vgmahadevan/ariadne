@@ -195,6 +195,15 @@ async def weave_repository(
     )
     if concurrency <= 0:
         raise GenerationError("max concurrency must be a positive integer")
+    if on_progress is not None:
+        on_progress(
+            ProgressEvent(
+                0,
+                len(plans),
+                plans[0].module,
+                ModuleStatus.PENDING.value,
+            )
+        )
     store = RunStateStore(inspection.context.root)
     config_fingerprint = _config_fingerprint(config)
     selection = inspection.context.selection.relative_to(

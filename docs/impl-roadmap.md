@@ -73,7 +73,7 @@ Implement:
 * context-overflow handling
 * async model invocation
 * bounded parallel generation across eligible modules
-* configurable concurrency with a sequential default
+* configurable concurrency with a default of eight active model requests
 * deterministic progress and result reporting despite out-of-order completion
 * graceful cancellation of in-flight work
 

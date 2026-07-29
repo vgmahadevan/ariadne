@@ -91,5 +91,6 @@ def test_initializes_default_config_and_gitignore_once(tmp_path: Path) -> None:
     assert first == second == tmp_path / ".ariadne" / "config.yaml"
     config = load_config(first)
     assert config.model.endpoint == "http://localhost:8000/v1"
+    assert config.generation.max_concurrency == 8
     assert "Update the model name and endpoint" in first.read_text(encoding="utf-8")
     assert gitignore.read_text(encoding="utf-8") == "dist/\n.ariadne/\n"

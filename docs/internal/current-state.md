@@ -7,7 +7,7 @@ repository-scale weaves.
 ## Current Architecture
 
 1. `ariadne.config` owns immutable repository, module, model, context, and
-   generation settings, including sequential-by-default concurrency.
+   generation settings, including a default concurrency of eight.
 2. Discovery remains isolated behind `inspect_repository()` and produces the
    immutable logical module tree consumed by generation planning.
 3. `ariadne.llm` exposes an async provider-neutral backend and structured model

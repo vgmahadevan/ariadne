@@ -313,7 +313,11 @@ def test_weave_generates_subtree_and_module_only(tmp_path: Path) -> None:
     assert len(results.modules) == 2
     assert all(item.output_path.is_file() for item in results.successful)
     assert len(backend.requests) == 2
-    assert progress == [(1, 2, "src"), (2, 2, "src/child")]
+    assert progress == [
+        (0, 2, "src"),
+        (1, 2, "src"),
+        (2, 2, "src/child"),
+    ]
     assert "prior AI-generated documentation; unverified" in (
         backend.requests[1].user_prompt
     )

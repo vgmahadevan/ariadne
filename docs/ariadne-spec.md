@@ -2168,7 +2168,7 @@ generation:
   overwrite_human_modified: false
   include_front_matter: true
   atomic_writes: true
-  max_concurrency: 1
+  max_concurrency: 8
 
 model:
   provider: openai-compatible
@@ -2469,17 +2469,16 @@ Any future dynamic-analysis feature must be separately sandboxed and opt-in.
 
 ## 35. Performance and Scalability
 
-### 35.1 Sequential default
+### 35.1 Bounded default
 
-The default should be conservative sequential processing with:
+The default supports up to eight active model requests:
 
 ```yaml
 generation:
-  max_concurrency: 1
+  max_concurrency: 8
 ```
 
-This is especially important when one memory-constrained local model server is
-available.
+Users of a single memory-constrained local model server should set this to `1`.
 
 ### 35.2 Parallelism
 
@@ -2710,7 +2709,7 @@ Implement:
 - safe clean;
 - async provider-neutral model invocation;
 - bounded dependency-aware parallel generation;
-- configurable concurrency with a sequential default;
+- configurable concurrency with a default of eight;
 - progress and state coordination for out-of-order completion;
 - graceful cancellation of in-flight model requests;
 - an async client compatibility spike covering SDK and generic HTTP options.
