@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 import pytest
 
-from ariadne.git import read_git_index
-from ariadne.models import FilePolicy, RepositoryConfig, RepositoryContext
-from ariadne.scanner import scan_repository
+from ariadne.discovery.models import RepositoryContext
+from ariadne.discovery.repository import read_git_index
+from ariadne.discovery.scanner import scan_repository
+from ariadne.settings import FilePolicy, RepositoryConfig
 
 from conftest import init_git
 

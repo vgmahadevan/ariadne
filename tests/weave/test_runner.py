@@ -1,3 +1,5 @@
+"""Retry, resume, concurrency, and cancellation coverage."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ariadne.generation import GenerationError, ModuleStatus, weave_repository
+from ariadne.weave import GenerationError, ModuleStatus, weave_repository
 from ariadne.llm import ModelError, ModelErrorKind, ModelRequest, ModelResponse
 
 

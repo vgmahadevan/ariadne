@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 import pytest
 
-from ariadne.models import RepositoryConfig
-from ariadne.repository import RepositoryError, resolve_repository
+from ariadne.discovery.repository import RepositoryError, resolve_repository
+from ariadne.settings import RepositoryConfig
 
 from conftest import init_git
 

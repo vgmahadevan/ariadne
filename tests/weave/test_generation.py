@@ -1,3 +1,5 @@
+"""Planning, context, document, and basic weave coverage."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,29 +8,28 @@ from pathlib import Path
 
 import pytest
 
-from ariadne.generation import (
+from ariadne.weave.context import assemble_context, build_prompt
+from ariadne.weave.documents import (
     PersistenceError,
-    PlannedModule,
     ValidationError,
-    assemble_context,
-    build_prompt,
     compose_document,
-    output_path,
     persist_document,
-    plan_modules,
-    top_down_modules,
     validate_document,
-    weave_repository,
 )
-from ariadne.inspection import inspect_repository
-from ariadne.llm import ModelError, ModelErrorKind, ModelRequest, ModelResponse
-from ariadne.models import (
-    AriadneConfig,
-    ContextConfig,
-    FilePolicy,
+from ariadne.weave.models import PlannedModule
+from ariadne.weave.planning import plan_modules
+from ariadne.weave.runner import weave_repository
+from ariadne.discovery import inspect_repository
+from ariadne.discovery.models import (
     InspectionResult,
     LogicalModule,
     RepositoryContext,
+)
+from ariadne.llm import ModelError, ModelErrorKind, ModelRequest, ModelResponse
+from ariadne.settings import (
+    AriadneConfig,
+    ContextConfig,
+    FilePolicy,
 )
 
 
@@ -79,15 +80,20 @@ def test_top_down_traversal_and_output_naming() -> None:
     child = LogicalModule("Child", "src", children=(leaf,))
     root = LogicalModule("repository", ".", children=(child,))
 
-    assert [item[0].name for item in top_down_modules(root)] == [
+    inspection = InspectionResult(
+        context=RepositoryContext(Path("/repo"), Path("/repo"), None, False),
+        physical_nodes=(),
+        ignored_paths=(),
+        root_module=root,
+    )
+    plans = plan_modules(inspection, AriadneConfig(), module_only=False)
+    only = plan_modules(inspection, AriadneConfig(), module_only=True)
+
+    assert [item.module.name for item in plans] == [
         "repository", "Child", "Leaf API"
     ]
-    assert [item[0].name for item in top_down_modules(root, module_only=True)] == [
-        "repository"
-    ]
-    assert output_path(Path("/repo"), leaf, "-genai-doc.md") == (
-        Path("/repo/src/leaf/leaf-api-genai-doc.md")
-    )
+    assert [item.module.name for item in only] == ["repository"]
+    assert plans[-1].output == Path("/repo/src/leaf/leaf-api-genai-doc.md")
 
 
 def test_output_collisions_are_disambiguated_deterministically(tmp_path: Path) -> None:

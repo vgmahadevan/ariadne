@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ariadne.cleanup import clean_repository
-from ariadne.generation import compose_document
-from ariadne.models import AriadneConfig, LogicalModule
+from ariadne.weave.cleanup import clean_repository
+from ariadne.weave.documents import compose_document
+from ariadne.discovery.models import LogicalModule
+from ariadne.settings import AriadneConfig
 
 
 def _generated(module: str, *, human_modified: bool = False) -> str:

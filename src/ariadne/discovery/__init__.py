@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from .config import discover_config, load_config
-from .git import read_git_index
-from .models import FilePolicy, InspectionResult
+from ..config import discover_config, load_config
+from ..settings import FilePolicy
+from .models import InspectionResult, LogicalModule
 from .modules import discover_modules
-from .repository import resolve_repository
+from .repository import read_git_index, resolve_repository
 from .scanner import scan_repository
+
+__all__ = ["InspectionResult", "LogicalModule", "inspect_repository"]
 
 
 def inspect_repository(

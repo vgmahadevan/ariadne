@@ -1,5 +1,7 @@
-from ariadne.models import PhysicalNode
-from ariadne.modules import discover_modules
+from __future__ import annotations
+
+from ariadne.discovery.models import PhysicalNode
+from ariadne.discovery.modules import discover_modules
 
 
 def _dir(path: str) -> PhysicalNode:

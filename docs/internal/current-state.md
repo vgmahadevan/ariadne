@@ -6,19 +6,16 @@ repository-scale weaves.
 
 ## Current Architecture
 
-1. `ariadne.config` owns immutable repository, module, model, context, and
-   generation settings, including a default concurrency of eight.
-2. Discovery remains isolated behind `inspect_repository()` and produces the
-   immutable logical module tree consumed by generation planning.
-3. `ariadne.llm` exposes an async provider-neutral backend and structured model
-   errors. The OpenAI-compatible implementation uses a pooled `httpx` client.
-4. `ariadne.generation` assembles context and executes individual module
-   attempts, while its coordinator schedules dependency-ready modules and
-   returns plan-ordered outcomes.
-5. `ariadne.state` atomically persists repository-local run manifests and the
-   latest-run index.
-6. `ariadne.cleanup` safely selects Ariadne-owned final documents and drafts.
-7. `ariadne.cli` exposes `inspect`, `weave`, and `clean`, renders deterministic
+1. `ariadne.settings` owns immutable repository, module, model, context, and
+   generation settings; `ariadne.config` owns their YAML lifecycle.
+2. `ariadne.discovery` contains repository resolution, Git inspection,
+   scanning, logical-module discovery, and inspection rendering.
+3. `ariadne.llm.base` defines the async provider-neutral contract and
+   structured errors; `ariadne.llm.openai_compatible` implements pooled HTTP.
+4. `ariadne.weave` separates planning, context and prompting, document
+   provenance and persistence, manifest state, module attempts, scheduling,
+   and safe cleanup.
+5. `ariadne.cli` exposes `inspect`, `weave`, and `clean`, renders deterministic
    progress and summaries, and maps complete, partial, fatal, and interrupted
    runs to distinct exit statuses.
 

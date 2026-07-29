@@ -7,23 +7,22 @@ import time
 from pathlib import Path
 from typing import Callable, TextIO
 
-from .cleanup import clean_repository
 from .config import ConfigurationError
-from .generation import (
+from .weave import (
     GenerationError,
     ModuleStatus,
     PersistenceError,
     ProgressEvent,
     ValidationError,
+    clean_repository,
     weave_repository,
 )
-from .git import GitError
-from .inspection import inspect_repository
+from .discovery import inspect_repository
+from .discovery.render import render_inspection
+from .discovery.repository import GitError, RepositoryError
 from .llm import LLMBackend, ModelError
-from .models import FilePolicy
-from .render import render_inspection
-from .repository import RepositoryError
-from .state import StateError
+from .settings import FilePolicy
+from .weave.state import StateError
 
 
 class _ProgressBar:
@@ -230,7 +229,6 @@ def main(
                 "ariadne: weave complete: "
                 f"generated={summary.generated} updated={summary.updated} "
                 f"failed={summary.failed} partial={summary.partial} "
-                f"cancelled={summary.cancelled} "
                 f"elapsed={_format_duration(elapsed)}",
                 file=sys.stderr,
             )

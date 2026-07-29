@@ -8,7 +8,7 @@ from ariadne.config import (
     initialize_config,
     load_config,
 )
-from ariadne.models import FilePolicy
+from ariadne.settings import FilePolicy
 
 
 def test_discovers_and_loads_config_relative_to_repository(tmp_path: Path) -> None:

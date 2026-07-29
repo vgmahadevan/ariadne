@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import discover_config, load_config
-from .generation import read_document_metadata
-from .inspection import inspect_repository
+from ..config import discover_config, load_config
+from ..discovery import inspect_repository
+from .documents import read_document_metadata
 
 
 @dataclass(frozen=True)

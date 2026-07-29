@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 
@@ -10,7 +12,7 @@ from ariadne.llm import (
     ModelRequest,
     OpenAICompatibleBackend,
 )
-from ariadne.models import ModelConfig
+from ariadne.settings import ModelConfig
 
 
 def _run(backend: OpenAICompatibleBackend):

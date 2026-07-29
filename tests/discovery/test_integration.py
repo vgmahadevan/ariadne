@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 from pathlib import Path
 
-from ariadne.inspection import inspect_repository
-from ariadne.models import FilePolicy
-from ariadne.render import render_inspection
+from ariadne.discovery import inspect_repository
+from ariadne.discovery.render import render_inspection
+from ariadne.settings import FilePolicy
 
 from conftest import init_git
 

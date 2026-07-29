@@ -6,9 +6,9 @@ from pathlib import Path, PurePosixPath
 
 from pathspec import PathSpec
 
-from .git import GitIndex
-from .languages import detect_language
-from .models import IgnoredPath, PhysicalNode, RepositoryConfig, RepositoryContext
+from ..settings import RepositoryConfig
+from .models import IgnoredPath, PhysicalNode, RepositoryContext
+from .repository import GitIndex
 
 DEFAULT_IGNORED_NAMES = frozenset(
     {
@@ -25,12 +25,39 @@ MANIFEST_NAMES = frozenset(
     }
 )
 DOCUMENT_NAMES = frozenset({"README", "README.md", "README.rst", "README.txt"})
+LANGUAGES = {
+    ".py": "Python",
+    ".js": "JavaScript",
+    ".jsx": "JavaScript",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript",
+    ".java": "Java",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".c": "C",
+    ".h": "C",
+    ".cc": "C++",
+    ".cpp": "C++",
+    ".hpp": "C++",
+    ".cs": "C#",
+    ".rb": "Ruby",
+    ".php": "PHP",
+    ".swift": "Swift",
+    ".kt": "Kotlin",
+    ".kts": "Kotlin",
+    ".scala": "Scala",
+    ".sh": "Shell",
+}
 
 
 @dataclass(frozen=True)
 class ScanResult:
     nodes: tuple[PhysicalNode, ...]
     ignored: tuple[IgnoredPath, ...]
+
+
+def detect_language(path: Path) -> str | None:
+    return LANGUAGES.get(path.suffix.lower())
 
 
 def scan_repository(

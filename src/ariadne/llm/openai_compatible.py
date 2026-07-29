@@ -2,69 +2,18 @@ from __future__ import annotations
 
 import json
 import urllib.parse
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
 from email.utils import parsedate_to_datetime
-from typing import Protocol
 
 import httpx
 
-from .models import ModelConfig
-
-
-@dataclass(frozen=True)
-class ModelRequest:
-    system_prompt: str
-    user_prompt: str
-
-
-@dataclass(frozen=True)
-class ModelResponse:
-    text: str
-    model: str
-
-
-class ModelErrorKind(str, Enum):
-    AUTHENTICATION = "authentication"
-    TIMEOUT = "timeout"
-    CONTEXT_LENGTH = "context-length"
-    RATE_LIMIT = "rate-limit"
-    SERVER = "server"
-    INVALID_RESPONSE = "invalid-response"
-    CONNECTION = "connection"
-
-
-class ModelError(RuntimeError):
-    def __init__(
-        self,
-        kind: ModelErrorKind,
-        message: str,
-        *,
-        status_code: int | None = None,
-        retryable: bool | None = None,
-        retry_after: float | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.kind = kind
-        self.status_code = status_code
-        self.retryable = (
-            kind
-            in {
-                ModelErrorKind.TIMEOUT,
-                ModelErrorKind.CONNECTION,
-                ModelErrorKind.RATE_LIMIT,
-                ModelErrorKind.SERVER,
-                ModelErrorKind.CONTEXT_LENGTH,
-            }
-            if retryable is None
-            else retryable
-        )
-        self.retry_after = retry_after
-
-
-class LLMBackend(Protocol):
-    async def generate(self, request: ModelRequest) -> ModelResponse: ...
+from ..settings import ModelConfig
+from .base import (
+    ModelError,
+    ModelErrorKind,
+    ModelRequest,
+    ModelResponse,
+)
 
 
 class OpenAICompatibleBackend:
@@ -77,12 +26,6 @@ class OpenAICompatibleBackend:
         self.config = config
         self._client = client
         self._owns_client = client is None
-
-    async def __aenter__(self) -> OpenAICompatibleBackend:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        await self.aclose()
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:

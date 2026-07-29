@@ -1,6 +1,5 @@
 """Ariadne repository discovery."""
 
-from .inspection import inspect_repository
-from .models import InspectionResult, LogicalModule
+from .discovery import InspectionResult, LogicalModule, inspect_repository
 
 __all__ = ["InspectionResult", "LogicalModule", "inspect_repository"]

@@ -2,9 +2,9 @@ import io
 from pathlib import Path
 
 from ariadne.cli import _ProgressBar, main
-from ariadne.generation import ProgressEvent
+from ariadne.weave.models import ProgressEvent
 from ariadne.llm import ModelResponse
-from ariadne.models import LogicalModule
+from ariadne.discovery.models import LogicalModule
 
 
 class CliFakeBackend:
