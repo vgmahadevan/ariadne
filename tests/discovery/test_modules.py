@@ -26,6 +26,7 @@ def test_collapses_unary_structural_chain_and_aggregates_metadata() -> None:
 
     root = discover_modules(nodes, ".", collapse=True)
 
+    assert root.name == "repository"
     optimizer = root.children[0]
     assert optimizer.name == "optimizer"
     assert optimizer.physical_path == "src/main/java/com/company/optimizer"

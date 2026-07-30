@@ -148,3 +148,16 @@ def test_connection_error_names_sanitized_endpoint() -> None:
     assert "token" not in str(captured.value)
     assert "secret" not in str(captured.value)
     asyncio.run(client.aclose())
+
+
+def test_timeout_is_classified_as_retryable() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(ModelError) as captured:
+        _run(OpenAICompatibleBackend(ModelConfig(), client=client))
+
+    assert captured.value.kind is ModelErrorKind.TIMEOUT
+    assert captured.value.retryable
+    asyncio.run(client.aclose())

@@ -48,6 +48,16 @@ def test_rejects_unknown_and_invalid_configuration(tmp_path: Path) -> None:
     with pytest.raises(ConfigurationError, match="file_policy"):
         load_config(path)
 
+    path.write_text(
+        "generation:\n  include_front_matter: false\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigurationError, match="include_front_matter must be true"):
+        load_config(path)
+
+    path.write_text("generation:\n  atomic_writes: false\n", encoding="utf-8")
+    with pytest.raises(ConfigurationError, match="atomic_writes must be true"):
+        load_config(path)
+
 
 def test_loads_phase_two_model_context_and_generation_config(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
@@ -93,4 +103,17 @@ def test_initializes_default_config_and_gitignore_once(tmp_path: Path) -> None:
     assert config.model.endpoint == "http://localhost:8000/v1"
     assert config.generation.max_concurrency == 8
     assert "Update the model name and endpoint" in first.read_text(encoding="utf-8")
+    internal_readme = tmp_path / ".ariadne" / "README.md"
+    assert "`state.json`" in internal_readme.read_text(encoding="utf-8")
+    assert "`runs/<run-id>.json`" in internal_readme.read_text(encoding="utf-8")
     assert gitignore.read_text(encoding="utf-8") == "dist/\n.ariadne/\n"
+
+
+def test_internal_readme_is_not_overwritten(tmp_path: Path) -> None:
+    initialize_config(tmp_path)
+    readme = tmp_path / ".ariadne" / "README.md"
+    readme.write_text("# Team notes\n", encoding="utf-8")
+
+    initialize_config(tmp_path)
+
+    assert readme.read_text(encoding="utf-8") == "# Team notes\n"

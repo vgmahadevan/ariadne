@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from ariadne.weave import GenerationError, ModuleStatus, weave_repository
 from ariadne.llm import ModelError, ModelErrorKind, ModelRequest, ModelResponse
+from ariadne.settings import AriadneConfig
+from ariadne.weave import GenerationError, ModuleStatus, weave_repository
+from ariadne.weave.state import resume_fingerprint
 
 
 def _config(root: Path, *, concurrency: int = 1) -> Path:
@@ -288,3 +291,19 @@ def test_explicit_zero_concurrency_is_rejected(tmp_path: Path) -> None:
                 max_concurrency=0,
             )
         )
+
+
+def test_operational_settings_do_not_invalidate_resume_fingerprint() -> None:
+    config = AriadneConfig()
+    changed = replace(
+        config,
+        generation=replace(
+            config.generation,
+            max_concurrency=1,
+            overwrite_generated=False,
+            overwrite_human_modified=True,
+        ),
+        model=replace(config.model, timeout_seconds=1),
+    )
+
+    assert resume_fingerprint(changed) == resume_fingerprint(config)

@@ -72,10 +72,7 @@ async def execute_module(
                 source_commit_value=commit,
                 model=response.model,
             )
-            validate_document(
-                document,
-                require_front_matter=config.generation.include_front_matter,
-            )
+            validate_document(document)
             persist_document(plan.output, document, config=config, force=force)
             if not plan.output.is_file():
                 raise PersistenceError(

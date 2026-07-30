@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..settings import AriadneConfig
+from .context import PROMPT_VERSION
 from .documents import ValidationError, validate_document
 from .models import GenerationResult, ModuleStatus, PlannedModule
 from .planning import module_id
@@ -56,11 +57,19 @@ class RunStateStore:
         return manifest
 
 
-def config_fingerprint(config: AriadneConfig) -> str:
+def resume_fingerprint(config: AriadneConfig) -> str:
     payload = {
-        "model": config.model.__dict__,
+        "prompt_version": PROMPT_VERSION,
+        "model": {
+            "provider": config.model.provider,
+            "model": config.model.model,
+            "endpoint": config.model.endpoint,
+            "context_window": config.model.context_window,
+            "max_output_tokens": config.model.max_output_tokens,
+            "temperature": config.model.temperature,
+        },
         "context": config.context.__dict__,
-        "generation": config.generation.__dict__,
+        "output_suffix": config.generation.output_suffix,
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -166,10 +175,7 @@ def result_from_entry(root: Path, entry: dict[str, object]) -> GenerationResult:
 
 def _valid_existing_output(path: Path, config: AriadneConfig) -> bool:
     try:
-        validate_document(
-            path.read_text(encoding="utf-8"),
-            require_front_matter=config.generation.include_front_matter,
-        )
+        validate_document(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValidationError):
         return False
     return True

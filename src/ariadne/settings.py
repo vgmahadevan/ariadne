@@ -52,8 +52,6 @@ class ContextConfig:
 @dataclass(frozen=True)
 class GenerationConfig:
     output_suffix: str = "-genai-doc.md"
-    include_front_matter: bool = True
-    atomic_writes: bool = True
     overwrite_generated: bool = True
     overwrite_human_modified: bool = False
     max_concurrency: int = 8

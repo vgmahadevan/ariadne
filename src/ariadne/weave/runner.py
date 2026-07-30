@@ -6,12 +6,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from ..config import discover_config, initialize_config, load_config
+from ..config import (
+    discover_config,
+    initialize_config,
+    initialize_internal_readme,
+    load_config,
+)
 from ..discovery import inspect_repository
 from ..discovery.repository import source_commit
 from ..llm import LLMBackend, OpenAICompatibleBackend
 from ..settings import FilePolicy
 from .documents import tool_version
+from .context import PROMPT_VERSION
 from .executor import execute_module
 from .models import (
     GenerationError,
@@ -25,8 +31,8 @@ from .models import (
 from .planning import module_id, parent_indices, plan_modules
 from .state import (
     RunStateStore,
-    config_fingerprint,
     manifest_entry,
+    resume_fingerprint,
     result_from_entry,
     update_manifest_entry,
 )
@@ -75,6 +81,7 @@ async def weave_repository(
         git_enabled=git_enabled,
         file_policy=file_policy,
     )
+    initialize_internal_readme(inspection.context.root)
     selected_backend = backend or OpenAICompatibleBackend(config.model)
     owns_backend = backend is None
     plans = plan_modules(inspection, config, module_only=module_only)
@@ -98,7 +105,7 @@ async def weave_repository(
     clock = now or (lambda: datetime.now().astimezone())
     commit = source_commit(inspection)
     store = RunStateStore(inspection.context.root)
-    fingerprint = config_fingerprint(config)
+    fingerprint = resume_fingerprint(config)
     selection = inspection.context.selection.relative_to(
         inspection.context.root
     ).as_posix() or "."
@@ -142,6 +149,7 @@ async def weave_repository(
         "tool_version": tool_version(),
         "model": config.model.model,
         "config_fingerprint": fingerprint,
+        "prompt_version": PROMPT_VERSION,
         "started_at": (previous or {}).get("started_at", started.isoformat()),
         "finished_at": None,
         "interrupted": False,

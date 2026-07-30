@@ -43,28 +43,26 @@ def compose_document(
         "modifies or reviews this document, please record that change in the "
         "provenance metadata or review notes.*"
     )
-    parts: list[str] = []
-    if config.generation.include_front_matter:
-        metadata = {
-            "ariadne": {
-                "generated": True,
-                "generated_at": timestamp,
-                "tool_version": tool_version(),
-                "model": model,
-                "source_commit": source_commit_value,
-                "logical_module": module.physical_path,
-                "status": "AI-GENERATED",
-                "human_reviewed": False,
-                "human_modified": False,
-            }
+    metadata = {
+        "ariadne": {
+            "generated": True,
+            "generated_at": timestamp,
+            "tool_version": tool_version(),
+            "model": model,
+            "source_commit": source_commit_value,
+            "logical_module": module.physical_path,
+            "status": "AI-GENERATED",
+            "human_reviewed": False,
+            "human_modified": False,
         }
-        yaml_text = yaml.safe_dump(metadata, sort_keys=False).strip()
-        parts.append(f"---\n{yaml_text}\n---")
+    }
+    yaml_text = yaml.safe_dump(metadata, sort_keys=False).strip()
+    parts = [f"---\n{yaml_text}\n---"]
     parts.extend([disclaimer, body])
     return "\n\n".join(parts) + "\n"
 
 
-def validate_document(document: str, *, require_front_matter: bool = True) -> None:
+def validate_document(document: str) -> None:
     if not document.strip():
         raise ValidationError("generated document is empty")
     remainder = document
@@ -81,18 +79,17 @@ def validate_document(document: str, *, require_front_matter: bool = True) -> No
             raise ValidationError("front matter must be a mapping")
         metadata = parsed
         remainder = document[end + 5 :]
-    elif require_front_matter:
+    else:
         raise ValidationError("front matter is missing")
-    if require_front_matter:
-        provenance = metadata.get("ariadne")
-        if not isinstance(provenance, dict) or not all(
-            key in provenance
-            for key in {
-                "generated", "generated_at", "tool_version", "model",
-                "logical_module", "status", "human_reviewed",
-            }
-        ):
-            raise ValidationError("front matter provenance is incomplete")
+    provenance = metadata.get("ariadne")
+    if not isinstance(provenance, dict) or not all(
+        key in provenance
+        for key in {
+            "generated", "generated_at", "tool_version", "model",
+            "logical_module", "status", "human_reviewed",
+        }
+    ):
+        raise ValidationError("front matter provenance is incomplete")
     if "AI-generated documentation" not in remainder:
         raise ValidationError("AI-generated disclaimer is missing")
     titles = re.findall(r"^# (.+)$", remainder, flags=re.MULTILINE)
@@ -123,9 +120,6 @@ def persist_document(
             raise PersistenceError(f"refusing to overwrite non-Ariadne document: {destination}")
         if generated and not config.generation.overwrite_generated and not force:
             raise PersistenceError(f"generated document already exists: {destination}")
-    if not config.generation.atomic_writes:
-        destination.write_text(document, encoding="utf-8")
-        return
     try:
         _atomic_write(destination, document)
     except OSError as exc:

@@ -43,11 +43,30 @@ context:
 
 generation:
   output_suffix: -genai-doc.md
-  include_front_matter: true
-  atomic_writes: true
   overwrite_generated: true
   overwrite_human_modified: false
   max_concurrency: 8
+"""
+
+INTERNAL_README = """\
+# Ariadne Internal Files
+
+This directory contains Ariadne configuration and recoverable weave state. It
+is normally excluded from Git and does not contain the generated documentation
+corpus itself.
+
+- `config.yaml` — user-editable repository, model, context, and generation
+  settings.
+- `state.json` — a generated pointer to the latest weave manifest.
+- `runs/<run-id>.json` — generated per-run plans, module outcomes, errors, and
+  resume metadata.
+- `drafts/<run-id>/` — partial model output retained when Markdown validation
+  fails.
+
+`ariadne clean` preserves configuration and run history. Deleting generated
+state or run manifests is safe for the documentation files, but removes
+Ariadne's ability to resume those runs. Ariadne will not overwrite this README
+if you edit it.
 """
 
 
@@ -70,8 +89,22 @@ def initialize_config(root: Path) -> Path:
             handle.write(DEFAULT_CONFIG)
     except FileExistsError:
         pass
+    initialize_internal_readme(root)
     _ignore_ariadne_directory(root / ".gitignore")
     return config_path
+
+
+def initialize_internal_readme(root: Path) -> Path:
+    readme = root / ".ariadne" / "README.md"
+    readme.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with readme.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(INTERNAL_README)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise ConfigurationError(f"cannot initialize {readme}: {exc}") from exc
+    return readme
 
 
 def load_config(path: Path | None) -> AriadneConfig:
@@ -115,6 +148,12 @@ def load_config(path: Path | None) -> AriadneConfig:
     _reject_unknown(model, allowed_model, "model")
     _reject_unknown(context, allowed_context, "context")
     _reject_unknown(generation, allowed_generation, "generation")
+    for required in ("include_front_matter", "atomic_writes"):
+        if not _boolean(generation, required, True):
+            raise ConfigurationError(
+                f"generation.{required} must be true; it is required for "
+                "safe persistence and cleanup"
+            )
     root = repository.get("root")
     if root is not None and not isinstance(root, str):
         raise ConfigurationError("repository.root must be a string")
@@ -175,8 +214,6 @@ def load_config(path: Path | None) -> AriadneConfig:
         ),
         generation=GenerationConfig(
             output_suffix=output_suffix,
-            include_front_matter=_boolean(generation, "include_front_matter", True),
-            atomic_writes=_boolean(generation, "atomic_writes", True),
             overwrite_generated=_boolean(
                 generation, "overwrite_generated", True
             ),

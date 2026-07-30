@@ -15,7 +15,8 @@ ariadne inspect [path]
 ```
 
 The inspection output includes the number of module documentation files that a
-subsequent subtree weave will generate.
+subsequent subtree weave will generate. The logical module at the repository
+root is named `repository`; selected subtree roots retain their module name.
 
 Generate one `*-genai-doc.md` per module in a selected subtree:
 
@@ -82,4 +83,15 @@ On the first `weave` in a repository without configuration, Ariadne creates
 configuration path. Review the generated model name and endpoint before
 retrying if no compatible service is already running at the default
 `http://localhost:8000/v1` endpoint.
+
+The `.ariadne/` directory also contains a generated `README.md` explaining its
+contents:
+
+- `config.yaml` contains user-editable settings.
+- `state.json` points to the latest weave.
+- `runs/` contains resumable run manifests and module outcomes.
+- `drafts/` contains partial Markdown retained after validation failures.
+
+Run state is separate from the generated `*-genai-doc.md` corpus and is
+preserved by `ariadne clean`.
 

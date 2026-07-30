@@ -8,6 +8,8 @@ from ..llm import ModelRequest
 from ..settings import AriadneConfig, ContextConfig
 from .models import ContextFile, ModuleContext, PlannedModule
 
+PROMPT_VERSION = 1
+
 
 def assemble_context(
     inspection: InspectionResult,
