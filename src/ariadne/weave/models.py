@@ -5,6 +5,7 @@ from enum import Enum
 from pathlib import Path
 
 from ..discovery.models import LogicalModule
+from .retrieval import RetrievalSummary
 
 
 class GenerationError(RuntimeError):
@@ -51,6 +52,7 @@ class GenerationResult:
     draft_path: Path | None = None
     error_status_code: int | None = None
     retryable: bool | None = None
+    retrieval: RetrievalSummary = RetrievalSummary()
 
 
 class ModuleStatus(str, Enum):

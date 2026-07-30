@@ -9,10 +9,12 @@ import httpx
 
 from ..settings import ModelConfig
 from .base import (
+    ConversationMessage,
     ModelError,
     ModelErrorKind,
     ModelRequest,
     ModelResponse,
+    ToolCall,
 )
 
 
@@ -35,13 +37,22 @@ class OpenAICompatibleBackend:
     async def generate(self, request: ModelRequest) -> ModelResponse:
         payload = {
             "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": request.system_prompt},
-                {"role": "user", "content": request.user_prompt},
-            ],
+            "messages": [_message_payload(item) for item in request.messages],
             "max_tokens": self.config.max_output_tokens,
             "temperature": self.config.temperature,
         }
+        if request.tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in request.tools
+            ]
         client = self._client
         if client is None:
             client = httpx.AsyncClient(
@@ -78,7 +89,7 @@ class OpenAICompatibleBackend:
             )
         try:
             data = response.json()
-            text = _extract_text(data)
+            text, tool_calls = _extract_message(data)
             response_model = data.get("model", self.config.model)
         except json.JSONDecodeError as exc:
             raise ModelError(
@@ -93,13 +104,17 @@ class OpenAICompatibleBackend:
                 "JSON in an unsupported format; expected text at "
                 "choices[0].message.content.",
             ) from exc
-        if not isinstance(text, str) or not text.strip():
+        if (not isinstance(text, str) or not text.strip()) and not tool_calls:
             raise ModelError(
                 ModelErrorKind.INVALID_RESPONSE,
                 f"model endpoint {_display_endpoint(self.config.endpoint)} returned "
                 "an empty choices[0].message.content value.",
             )
-        return ModelResponse(text=text, model=str(response_model))
+        return ModelResponse(
+            text=text if isinstance(text, str) and text.strip() else None,
+            model=str(response_model),
+            tool_calls=tool_calls,
+        )
 
 
 def _http_error_kind(status: int, detail: str) -> ModelErrorKind:
@@ -115,13 +130,40 @@ def _http_error_kind(status: int, detail: str) -> ModelErrorKind:
     return ModelErrorKind.INVALID_RESPONSE
 
 
-def _extract_text(data: object) -> str:
+def _message_payload(message: ConversationMessage) -> dict[str, object]:
+    payload: dict[str, object] = {"role": message.role}
+    if message.content is not None:
+        payload["content"] = message.content
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": json.dumps(call.arguments, sort_keys=True),
+                },
+            }
+            for call in message.tool_calls
+        ]
+    if message.tool_call_id is not None:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.name is not None:
+        payload["name"] = message.name
+    return payload
+
+
+def _extract_message(data: object) -> tuple[str | None, tuple[ToolCall, ...]]:
     if not isinstance(data, dict):
         raise TypeError("response must be an object")
-    content = data["choices"][0]["message"]["content"]
+    message = data["choices"][0]["message"]
+    if not isinstance(message, dict):
+        raise TypeError("message must be an object")
+    content = message.get("content")
+    text: str | None
     if isinstance(content, str):
-        return content
-    if isinstance(content, list):
+        text = content
+    elif isinstance(content, list):
         parts: list[str] = []
         for item in content:
             if not isinstance(item, dict):
@@ -131,9 +173,30 @@ def _extract_text(data: object) -> str:
             ):
                 parts.append(item["text"])
         if not parts:
-            raise ValueError("content has no text parts")
-        return "".join(parts)
-    raise TypeError("content must be text or text parts")
+            text = None
+        else:
+            text = "".join(parts)
+    elif content is None:
+        text = None
+    else:
+        raise TypeError("content must be text, text parts, or null")
+    calls: list[ToolCall] = []
+    raw_calls = message.get("tool_calls", [])
+    if not isinstance(raw_calls, list):
+        raise TypeError("tool_calls must be a list")
+    for item in raw_calls:
+        if not isinstance(item, dict) or item.get("type") != "function":
+            raise TypeError("tool call must be a function object")
+        function = item.get("function")
+        if not isinstance(function, dict):
+            raise TypeError("tool function must be an object")
+        arguments = json.loads(function["arguments"])
+        if not isinstance(arguments, dict):
+            raise TypeError("tool arguments must be an object")
+        calls.append(
+            ToolCall(str(item["id"]), str(function["name"]), arguments)
+        )
+    return text, tuple(calls)
 
 
 def _display_endpoint(endpoint: str) -> str:

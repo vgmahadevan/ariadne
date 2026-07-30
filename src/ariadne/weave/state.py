@@ -69,6 +69,15 @@ def resume_fingerprint(config: AriadneConfig) -> str:
             "temperature": config.model.temperature,
         },
         "context": config.context.__dict__,
+        "retrieval": {
+            "enabled": config.retrieval.enabled,
+            "tools": config.retrieval.tools,
+            "max_tool_calls_per_module": (
+                config.retrieval.max_tool_calls_per_module
+            ),
+            "max_identical_calls": config.retrieval.max_identical_calls,
+            "max_result_bytes": config.retrieval.max_result_bytes,
+        },
         "output_suffix": config.generation.output_suffix,
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
@@ -106,6 +115,7 @@ def manifest_entry(
         "config_fingerprint": fingerprint,
         "last_attempted_at": None,
         "finished_at": None,
+        "retrieval": {},
     }
     if (
         resume
@@ -141,12 +151,25 @@ def update_manifest_entry(
             "error_status_code": result.error_status_code,
             "retryable": result.retryable,
             "finished_at": finished_at,
+            "retrieval": {
+                "requested": result.retrieval.requested,
+                "executed": result.retrieval.executed,
+                "errors": result.retrieval.errors,
+                "per_tool": dict(result.retrieval.per_tool),
+                "warnings": list(result.retrieval.warnings),
+                "termination_reason": result.retrieval.termination_reason,
+            },
         }
     )
 
 
 def result_from_entry(root: Path, entry: dict[str, object]) -> GenerationResult:
+    from .retrieval import RetrievalSummary
+
     draft = entry.get("draft_path")
+    retrieval = entry.get("retrieval")
+    retrieval = retrieval if isinstance(retrieval, dict) else {}
+    per_tool = retrieval.get("per_tool")
     return GenerationResult(
         str(entry["logical_path"]),
         root / str(entry["output_path"]),
@@ -169,6 +192,32 @@ def result_from_entry(root: Path, entry: dict[str, object]) -> GenerationResult:
             bool(entry["retryable"])
             if entry.get("retryable") is not None
             else None
+        ),
+        RetrievalSummary(
+            requested=int(retrieval.get("requested", 0)),
+            executed=int(retrieval.get("executed", 0)),
+            errors=int(retrieval.get("errors", 0)),
+            per_tool=tuple(
+                sorted(
+                    (str(key), int(value))
+                    for key, value in (
+                        per_tool.items() if isinstance(per_tool, dict) else ()
+                    )
+                )
+            ),
+            warnings=tuple(
+                str(item)
+                for item in (
+                    retrieval.get("warnings")
+                    if isinstance(retrieval.get("warnings"), list)
+                    else ()
+                )
+            ),
+            termination_reason=(
+                str(retrieval["termination_reason"])
+                if retrieval.get("termination_reason") is not None
+                else None
+            ),
         ),
     )
 

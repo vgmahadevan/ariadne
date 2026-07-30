@@ -7,10 +7,13 @@ import httpx
 import pytest
 
 from ariadne.llm import (
+    ConversationMessage,
     ModelError,
     ModelErrorKind,
     ModelRequest,
     OpenAICompatibleBackend,
+    ToolCall,
+    ToolDefinition,
 )
 from ariadne.settings import ModelConfig
 
@@ -62,6 +65,69 @@ def test_openai_compatible_backend_uses_chat_completions_shape() -> None:
     assert captured["headers"]["authorization"] == "Bearer secret"
     assert response.text == "# Generated"
     assert response.model == "served-vllm-model"
+    asyncio.run(client.aclose())
+
+
+def test_backend_round_trips_native_tool_calls() -> None:
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "model": "fake",
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read_file",
+                                        "arguments": '{"path":"shared/api.py"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    backend = OpenAICompatibleBackend(ModelConfig(), client=client)
+    request = ModelRequest(
+        (
+            ConversationMessage("system", "system"),
+            ConversationMessage(
+                "assistant",
+                tool_calls=(ToolCall("old", "read_file", {"path": "old.py"}),),
+            ),
+            ConversationMessage(
+                "tool", "result", tool_call_id="old", name="read_file"
+            ),
+        ),
+        tools=(
+            ToolDefinition(
+                "read_file",
+                "Read a file.",
+                {"type": "object", "properties": {}},
+            ),
+        ),
+    )
+
+    response = asyncio.run(backend.generate(request))
+
+    assert captured["payload"]["tools"][0]["function"]["name"] == "read_file"
+    assert captured["payload"]["messages"][1]["tool_calls"][0]["id"] == "old"
+    assert captured["payload"]["messages"][2]["tool_call_id"] == "old"
+    assert response.text is None
+    assert response.tool_calls == (
+        ToolCall("call-1", "read_file", {"path": "shared/api.py"}),
+    )
     asyncio.run(client.aclose())
 
 

@@ -77,6 +77,10 @@ context:
 generation:
   overwrite_generated: false
   max_concurrency: 3
+retrieval:
+  tools: [read_file, search_code]
+  max_tool_calls_per_module: 7
+  max_result_bytes: 2048
 """,
         encoding="utf-8",
     )
@@ -89,6 +93,9 @@ generation:
     assert not config.context.include_generated_docs
     assert not config.generation.overwrite_generated
     assert config.generation.max_concurrency == 3
+    assert config.retrieval.tools == ("read_file", "search_code")
+    assert config.retrieval.max_tool_calls_per_module == 7
+    assert config.retrieval.max_result_bytes == 2048
 
 
 def test_initializes_default_config_and_gitignore_once(tmp_path: Path) -> None:
@@ -102,6 +109,8 @@ def test_initializes_default_config_and_gitignore_once(tmp_path: Path) -> None:
     config = load_config(first)
     assert config.model.endpoint == "http://localhost:8000/v1"
     assert config.generation.max_concurrency == 8
+    assert config.retrieval.enabled
+    assert "get_module_tree" in config.retrieval.tools
     assert "Update the model name and endpoint" in first.read_text(encoding="utf-8")
     internal_readme = tmp_path / ".ariadne" / "README.md"
     assert "`state.json`" in internal_readme.read_text(encoding="utf-8")

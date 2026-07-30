@@ -58,9 +58,25 @@ class GenerationConfig:
 
 
 @dataclass(frozen=True)
+class RetrievalConfig:
+    enabled: bool = True
+    tools: tuple[str, ...] = (
+        "list_directory",
+        "read_file",
+        "search_code",
+        "get_module_tree",
+    )
+    max_tool_calls_per_module: int = 20
+    max_identical_calls: int = 2
+    max_result_bytes: int = 50000
+    tool_timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
 class AriadneConfig:
     repository: RepositoryConfig = RepositoryConfig()
     modules: ModuleConfig = ModuleConfig()
     model: ModelConfig = ModelConfig()
     context: ContextConfig = ContextConfig()
     generation: GenerationConfig = GenerationConfig()
+    retrieval: RetrievalConfig = RetrievalConfig()

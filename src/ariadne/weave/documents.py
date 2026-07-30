@@ -92,6 +92,12 @@ def validate_document(document: str) -> None:
         raise ValidationError("front matter provenance is incomplete")
     if "AI-generated documentation" not in remainder:
         raise ValidationError("AI-generated disclaimer is missing")
+    if re.search(
+        r'(?i)(<tool_call\b|["\']tool_calls["\']\s*:|'
+        r'["\']tool_call_id["\']\s*:)',
+        remainder,
+    ):
+        raise ValidationError("document contains tool protocol data")
     titles = re.findall(r"^# (.+)$", remainder, flags=re.MULTILINE)
     if len(titles) != 1 or not titles[0].strip():
         raise ValidationError("document must contain exactly one level-one title")

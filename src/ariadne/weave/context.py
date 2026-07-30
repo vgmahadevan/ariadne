@@ -8,7 +8,7 @@ from ..llm import ModelRequest
 from ..settings import AriadneConfig, ContextConfig
 from .models import ContextFile, ModuleContext, PlannedModule
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 
 def assemble_context(
@@ -48,7 +48,9 @@ def assemble_context(
     )
 
 
-def build_prompt(context: ModuleContext) -> ModelRequest:
+def build_prompt(
+    context: ModuleContext, *, retrieval_enabled: bool = False
+) -> ModelRequest:
     system = (
         "You are Ariadne, a disciplined technical writer documenting one logical "
         "module. Ground claims in the supplied primary evidence. Human documentation "
@@ -103,6 +105,15 @@ def build_prompt(context: ModuleContext) -> ModelRequest:
             "- Describe parent, child, and external relationships only when useful and established by evidence.",
             "- Avoid file-by-file paraphrase and omit irrelevant sections.",
             "- State uncertainties instead of inventing intent.",
+            *(
+                [
+                    "- Use retrieval selectively when related evidence outside this "
+                    "module's initial context would materially improve the document. "
+                    "Retrieval may inspect admissible files anywhere in the repository."
+                ]
+                if retrieval_enabled
+                else []
+            ),
             "- Use repository-relative Markdown links.",
             "- Surface important implementation details; e.g., describe and explain calculations in that module's domain",
             "- Highlight assumptions made, unexpected findings, and surprising things that would be useful to a first time reader of the module",

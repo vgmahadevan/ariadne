@@ -81,6 +81,19 @@ async def weave_repository(
         git_enabled=git_enabled,
         file_policy=file_policy,
     )
+    retrieval_inspection = None
+    if config.retrieval.enabled:
+        if inspection.context.selection == inspection.context.root:
+            retrieval_inspection = inspection
+        else:
+            retrieval_inspection = inspect_repository(
+                cwd=inspection.context.root,
+                path=".",
+                config_path=selected_config,
+                root=str(inspection.context.root),
+                git_enabled=git_enabled,
+                file_policy=file_policy,
+            )
     initialize_internal_readme(inspection.context.root)
     selected_backend = backend or OpenAICompatibleBackend(config.model)
     owns_backend = backend is None
@@ -141,7 +154,7 @@ async def weave_repository(
     ]
     current_ids = {str(entry["module_id"]) for entry in entries}
     manifest: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
         "repository_root": str(inspection.context.root),
         "selection": selection,
@@ -228,6 +241,7 @@ async def weave_repository(
             on_attempt=lambda attempt: _record_attempt(
                 entries[index], attempt, manifest, store, clock
             ),
+            retrieval_inspection=retrieval_inspection,
         )
 
     try:

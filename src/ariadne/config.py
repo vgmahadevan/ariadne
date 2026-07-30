@@ -12,6 +12,7 @@ from .settings import (
     GenerationConfig,
     ModelConfig,
     ModuleConfig,
+    RetrievalConfig,
     RepositoryConfig,
 )
 
@@ -46,6 +47,18 @@ generation:
   overwrite_generated: true
   overwrite_human_modified: false
   max_concurrency: 8
+
+retrieval:
+  enabled: true
+  tools:
+    - list_directory
+    - read_file
+    - search_code
+    - get_module_tree
+  max_tool_calls_per_module: 20
+  max_identical_calls: 2
+  max_result_bytes: 50000
+  tool_timeout_seconds: 30
 """
 
 INTERNAL_README = """\
@@ -121,9 +134,10 @@ def load_config(path: Path | None) -> AriadneConfig:
     model = _mapping(data.get("model", {}), "model")
     context = _mapping(data.get("context", {}), "context")
     generation = _mapping(data.get("generation", {}), "generation")
+    retrieval = _mapping(data.get("retrieval", {}), "retrieval")
     _reject_unknown(
         data,
-        {"repository", "modules", "model", "context", "generation"},
+        {"repository", "modules", "model", "context", "generation", "retrieval"},
         "top-level",
     )
     allowed_repository = {
@@ -143,11 +157,16 @@ def load_config(path: Path | None) -> AriadneConfig:
         "output_suffix", "include_front_matter", "atomic_writes",
         "overwrite_generated", "overwrite_human_modified", "max_concurrency",
     }
+    allowed_retrieval = {
+        "enabled", "tools", "max_tool_calls_per_module",
+        "max_identical_calls", "max_result_bytes", "tool_timeout_seconds",
+    }
     _reject_unknown(repository, allowed_repository, "repository")
     _reject_unknown(modules, allowed_modules, "modules")
     _reject_unknown(model, allowed_model, "model")
     _reject_unknown(context, allowed_context, "context")
     _reject_unknown(generation, allowed_generation, "generation")
+    _reject_unknown(retrieval, allowed_retrieval, "retrieval")
     for required in ("include_front_matter", "atomic_writes"):
         if not _boolean(generation, required, True):
             raise ConfigurationError(
@@ -222,6 +241,22 @@ def load_config(path: Path | None) -> AriadneConfig:
             ),
             max_concurrency=_positive_int(generation, "max_concurrency", 8),
         ),
+        retrieval=RetrievalConfig(
+            enabled=_boolean(retrieval, "enabled", True),
+            tools=_retrieval_tools(retrieval),
+            max_tool_calls_per_module=_positive_int(
+                retrieval, "max_tool_calls_per_module", 20
+            ),
+            max_identical_calls=_positive_int(
+                retrieval, "max_identical_calls", 2
+            ),
+            max_result_bytes=_minimum_int(
+                retrieval, "max_result_bytes", 50000, minimum=256
+            ),
+            tool_timeout_seconds=_positive_number(
+                retrieval, "tool_timeout_seconds", 30.0
+            ),
+        ),
     )
 
 
@@ -251,6 +286,28 @@ def _patterns(data: dict[str, Any], key: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _retrieval_tools(data: dict[str, Any]) -> tuple[str, ...]:
+    default = (
+        "list_directory", "read_file", "search_code", "get_module_tree"
+    )
+    supported = set(default)
+    value = data.get("tools", list(default))
+    if (
+        not isinstance(value, list)
+        or not all(isinstance(item, str) for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise ConfigurationError(
+            "retrieval.tools must be a list of unique tool names"
+        )
+    unknown = sorted(set(value) - supported)
+    if unknown:
+        raise ConfigurationError(
+            f"unknown retrieval tool(s): {', '.join(unknown)}"
+        )
+    return tuple(value)
+
+
 def _string(data: dict[str, Any], key: str, default: str) -> str:
     value = data.get(key, default)
     if not isinstance(value, str) or not value:
@@ -269,6 +326,23 @@ def _nonnegative_int(data: dict[str, Any], key: str, default: int) -> int:
     value = data.get(key, default)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ConfigurationError(f"{key} must be a nonnegative integer")
+    return value
+
+
+def _minimum_int(
+    data: dict[str, Any],
+    key: str,
+    default: int,
+    *,
+    minimum: int,
+) -> int:
+    value = data.get(key, default)
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < minimum
+    ):
+        raise ConfigurationError(f"{key} must be an integer >= {minimum}")
     return value
 
 

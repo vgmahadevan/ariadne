@@ -6,7 +6,13 @@ from datetime import datetime
 from typing import Awaitable, Callable
 
 from ..discovery.models import InspectionResult
-from ..llm import LLMBackend, ModelError, ModelErrorKind
+from ..llm import (
+    ConversationMessage,
+    LLMBackend,
+    ModelError,
+    ModelErrorKind,
+    ModelRequest,
+)
 from ..settings import AriadneConfig
 from .context import assemble_context, build_prompt
 from .documents import (
@@ -19,6 +25,7 @@ from .documents import (
     validate_document,
 )
 from .models import GenerationResult, ModuleStatus, PlannedModule
+from .retrieval import RetrievalHarness, RetrievalSummary
 
 
 async def execute_module(
@@ -34,12 +41,15 @@ async def execute_module(
     sleep: Callable[[float], Awaitable[None]],
     run_id: str,
     on_attempt: Callable[[int], None],
+    retrieval_inspection: InspectionResult | None = None,
 ) -> GenerationResult:
     existed = plan.output.is_file()
     response_text: str | None = None
     response_model: str | None = None
     reduce_context = False
+    retrieval_summary = RetrievalSummary()
     for attempt in (1, 2):
+        harness: RetrievalHarness | None = None
         on_attempt(attempt)
         attempt_config = config
         if attempt == 2 and reduce_context:
@@ -61,9 +71,31 @@ async def execute_module(
                 source_commit_value=commit,
                 missing_parent=missing_parent,
             )
-            response = await backend.generate(build_prompt(context))
+            prompt = build_prompt(
+                context,
+                retrieval_enabled=(
+                    config.retrieval.enabled
+                    and retrieval_inspection is not None
+                ),
+            )
+            harness = (
+                RetrievalHarness(retrieval_inspection, config.retrieval)
+                if config.retrieval.enabled and retrieval_inspection is not None
+                else None
+            )
+            response = await _generate_with_retrieval(
+                backend, prompt, harness
+            )
+            if harness is not None:
+                retrieval_summary = harness.summary()
             response_text = response.text
             response_model = response.model
+            if response.text is None:
+                raise ModelError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "model did not return a final Markdown document.",
+                    retryable=False,
+                )
             document = compose_document(
                 response.text,
                 config=config,
@@ -89,10 +121,13 @@ async def execute_module(
                 ),
                 response.model,
                 attempt,
+                retrieval=retrieval_summary,
             )
         except asyncio.CancelledError:
             raise
         except ModelError as exc:
+            if harness is not None:
+                retrieval_summary = harness.summary()
             if attempt == 1 and exc.retryable:
                 reduce_context = exc.kind is ModelErrorKind.CONTEXT_LENGTH
                 delay = exc.retry_after if exc.retry_after is not None else 1.0
@@ -109,6 +144,7 @@ async def execute_module(
                 None,
                 exc.status_code,
                 exc.retryable,
+                retrieval_summary,
             )
         except (ValidationError, PersistenceError, OSError) as exc:
             draft_path = None
@@ -142,6 +178,7 @@ async def execute_module(
                 kind,
                 str(exc),
                 draft_path,
+                retrieval=retrieval_summary,
             )
         except Exception as exc:
             return GenerationResult(
@@ -152,5 +189,49 @@ async def execute_module(
                 attempt,
                 "internal",
                 f"{type(exc).__name__}: {exc}",
+                retrieval=retrieval_summary,
             )
     raise AssertionError("module attempts exhausted")
+
+
+async def _generate_with_retrieval(
+    backend: LLMBackend,
+    request: ModelRequest,
+    harness: RetrievalHarness | None,
+):
+    if harness is None or not harness.definitions:
+        return await backend.generate(request)
+    messages = list(request.messages)
+    while True:
+        response = await backend.generate(
+            ModelRequest(tuple(messages), tools=harness.definitions)
+        )
+        if not response.tool_calls:
+            return response
+        messages.append(
+            ConversationMessage(
+                "assistant",
+                response.text,
+                tool_calls=response.tool_calls,
+            )
+        )
+        for call in response.tool_calls:
+            result = await harness.execute(call)
+            messages.append(
+                ConversationMessage(
+                    "tool",
+                    result,
+                    tool_call_id=call.id,
+                    name=call.name,
+                )
+            )
+        if harness.termination_reason is not None:
+            messages.append(
+                ConversationMessage(
+                    "user",
+                    "Retrieval has ended. Using only the evidence already supplied, "
+                    "return the best-effort final Markdown document now. Do not emit "
+                    "tool calls or tool protocol data.",
+                )
+            )
+            return await backend.generate(ModelRequest(tuple(messages)))

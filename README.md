@@ -71,12 +71,28 @@ model:
   headers: {}
 generation:
   max_concurrency: 8
+retrieval:
+  enabled: true
+  tools:
+    - list_directory
+    - read_file
+    - search_code
+    - get_module_tree
+  max_tool_calls_per_module: 20
+  max_identical_calls: 2
+  max_result_bytes: 50000
+  tool_timeout_seconds: 30
 ```
 
 The same request shape is compatible with common vLLM OpenAI servers. Generated
 documents include machine-readable provenance and are written atomically.
 Existing documents marked as human-reviewed or human-modified are protected
 unless `--force` is supplied.
+
+When retrieval is enabled, the model can inspect admissible files anywhere
+under the configured repository root, including files outside the selected
+weave subtree. Repository file policy, ignore rules, path containment, result
+limits, timeouts, and loop detection remain controlled by Ariadne.
 
 On the first `weave` in a repository without configuration, Ariadne creates
 `.ariadne/config.yaml`, adds `.ariadne/` to `.gitignore`, and reports the new
