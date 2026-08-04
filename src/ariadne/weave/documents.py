@@ -31,6 +31,8 @@ def compose_document(
     generated_at: datetime,
     source_commit_value: str | None,
     model: str,
+    has_api: bool = False,
+    document_type: str = "module",
 ) -> str:
     body = draft.strip()
     timestamp = generated_at.isoformat()
@@ -54,12 +56,27 @@ def compose_document(
             "status": "AI-GENERATED",
             "human_reviewed": False,
             "human_modified": False,
+            "api": has_api,
+            "document_type": document_type,
         }
     }
     yaml_text = yaml.safe_dump(metadata, sort_keys=False).strip()
     parts = [f"---\n{yaml_text}\n---"]
     parts.extend([disclaimer, body])
     return "\n\n".join(parts) + "\n"
+
+
+_API_MARKER = re.compile(
+    r"^\s*<!--\s*ariadne-api:\s*(true|false)\s*-->\s*", re.IGNORECASE
+)
+
+
+def extract_api_assessment(draft: str) -> tuple[str, bool]:
+    """Remove the harness-only API marker and return its boolean assessment."""
+    match = _API_MARKER.match(draft)
+    if match is None:
+        return draft, False
+    return draft[match.end():], match.group(1).casefold() == "true"
 
 
 def validate_document(document: str) -> None:
@@ -141,6 +158,8 @@ def persist_partial_draft(
     text: str,
     model: str,
     generated_at: datetime,
+    *,
+    document_type: str = "module",
 ) -> Path:
     destination = (
         root
@@ -163,6 +182,7 @@ def persist_partial_draft(
             "status": "PARTIAL",
             "human_reviewed": False,
             "human_modified": False,
+            "document_type": document_type,
         }
     }
     document = (

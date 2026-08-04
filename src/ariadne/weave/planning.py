@@ -7,6 +7,7 @@ from pathlib import Path
 from ..discovery.models import InspectionResult, LogicalModule
 from ..settings import AriadneConfig
 from .models import GenerationError, PlannedModule
+API_OUTPUT_SUFFIX = "-genai-api-doc.md"
 
 
 def plan_modules(
@@ -14,6 +15,7 @@ def plan_modules(
     config: AriadneConfig,
     *,
     module_only: bool,
+    api: bool = False,
 ) -> tuple[PlannedModule, ...]:
     entries: list[
         tuple[LogicalModule, tuple[str, ...], LogicalModule | None, Path]
@@ -54,6 +56,26 @@ def plan_modules(
         )
         for module, ancestors, parent, _ in entries
     )
+    if api:
+        from .documents import read_document_metadata
+
+        selected: list[PlannedModule] = []
+        for plan in plans:
+            provenance = read_document_metadata(plan.output).get("ariadne")
+            if not isinstance(provenance, dict) or provenance.get("api") is not True:
+                continue
+            selected.append(
+                PlannedModule(
+                    plan.module,
+                    plan.ancestors,
+                    None,
+                    plan.output.with_name(
+                        f"{plan.output.name[:-len(config.generation.output_suffix)]}"
+                        f"{API_OUTPUT_SUFFIX}"
+                    ),
+                )
+            )
+        plans = tuple(selected)
     _check_collisions(plans)
     return plans
 

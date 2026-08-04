@@ -23,6 +23,7 @@ from .documents import (
     persist_document,
     persist_partial_draft,
     validate_document,
+    extract_api_assessment,
 )
 from .models import GenerationResult, ModuleStatus, PlannedModule
 from .retrieval import RetrievalHarness, RetrievalSummary
@@ -42,6 +43,7 @@ async def execute_module(
     run_id: str,
     on_attempt: Callable[[int], None],
     retrieval_inspection: InspectionResult | None = None,
+    api: bool = False,
 ) -> GenerationResult:
     existed = plan.output.is_file()
     response_text: str | None = None
@@ -73,6 +75,7 @@ async def execute_module(
             )
             prompt = build_prompt(
                 context,
+                api=api,
                 retrieval_enabled=(
                     config.retrieval.enabled
                     and retrieval_inspection is not None
@@ -96,13 +99,20 @@ async def execute_module(
                     "model did not return a final Markdown document.",
                     retryable=False,
                 )
+            body, has_api = (
+                (response.text, True)
+                if api
+                else extract_api_assessment(response.text)
+            )
             document = compose_document(
-                response.text,
+                body,
                 config=config,
                 module=plan.module,
                 generated_at=clock(),
                 source_commit_value=commit,
                 model=response.model,
+                has_api=has_api,
+                document_type="api" if api else "module",
             )
             validate_document(document)
             persist_document(plan.output, document, config=config, force=force)
@@ -157,6 +167,7 @@ async def execute_module(
                         response_text,
                         response_model or config.model.model,
                         clock(),
+                        document_type="api" if api else "module",
                     )
                 except PersistenceError as draft_exc:
                     exc = draft_exc

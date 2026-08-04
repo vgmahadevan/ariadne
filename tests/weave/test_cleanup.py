@@ -111,3 +111,19 @@ def test_clean_drafts_requires_draft_provenance_and_respects_subtree(
     assert not selected.exists()
     assert outside.exists()
     assert ordinary.exists()
+
+
+def test_api_clean_is_independent_from_regular_documents(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    regular = tmp_path / "src" / "src-genai-doc.md"
+    api = tmp_path / "src" / "src-genai-api-doc.md"
+    regular.write_text(_generated("src"), encoding="utf-8")
+    api.write_text(_generated("src"), encoding="utf-8")
+
+    result = clean_repository(
+        cwd=tmp_path, root=str(tmp_path), path="src", git_enabled=False, api=True
+    )
+
+    assert result.documents == (api,)
+    assert not api.exists()
+    assert regular.exists()

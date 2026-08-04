@@ -28,6 +28,7 @@ def clean_repository(
     dry_run: bool = False,
     include_human_modified: bool = False,
     include_drafts: bool = False,
+    api: bool = False,
 ) -> CleanResult:
     cwd = (cwd or Path.cwd()).resolve()
     config_start = Path(root).resolve() if root else cwd
@@ -50,7 +51,7 @@ def clean_repository(
         for candidate in _document_candidates(
             repository_root,
             selection,
-            config.generation.output_suffix,
+            "-genai-api-doc.md" if api else config.generation.output_suffix,
             include_human_modified=include_human_modified,
         )
     )
@@ -60,6 +61,7 @@ def clean_repository(
                 repository_root,
                 selection,
                 include_human_modified=include_human_modified,
+                api=api,
             )
         )
         if include_drafts
@@ -101,6 +103,7 @@ def _draft_candidates(
     selection: Path,
     *,
     include_human_modified: bool,
+    api: bool,
 ) -> list[Path]:
     draft_root = repository_root / ".ariadne" / "drafts"
     if not draft_root.is_dir():
@@ -115,6 +118,9 @@ def _draft_candidates(
         metadata = read_document_metadata(path)
         provenance = metadata.get("ariadne")
         if not isinstance(provenance, dict):
+            continue
+        document_type = provenance.get("document_type", "module")
+        if (document_type == "api") is not api:
             continue
         logical_module = provenance.get("logical_module")
         if not isinstance(logical_module, str) or not _logical_within(

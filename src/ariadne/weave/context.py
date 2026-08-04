@@ -8,7 +8,7 @@ from ..llm import ModelRequest
 from ..settings import AriadneConfig, ContextConfig
 from .models import ContextFile, ModuleContext, PlannedModule
 
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 
 
 def assemble_context(
@@ -49,7 +49,7 @@ def assemble_context(
 
 
 def build_prompt(
-    context: ModuleContext, *, retrieval_enabled: bool = False
+    context: ModuleContext, *, retrieval_enabled: bool = False, api: bool = False
 ) -> ModelRequest:
     system = (
         "You are Ariadne, a disciplined technical writer documenting one logical "
@@ -96,11 +96,24 @@ def build_prompt(
             "Do this only where the supplied evidence supports useful detail, "
             "and do not fall back to file-by-file paraphrase."
         ]
+    if api:
+        generation_instructions = [
+            "- Produce detailed API reference documentation grounded in the supplied files.",
+            "- Enumerate every supported route, including HTTP method and path.",
+            "- For each route document path, query, header, cookie, and body parameters; request and response schemas; status codes; authentication; validation; and concrete examples when supported.",
+            "- Explain shared middleware, versioning, error formats, and route registration where supported.",
+            "- Explicitly identify details that cannot be established from the evidence.",
+        ]
+    else:
+        generation_instructions = [
+            "- On the first line output exactly `<!-- ariadne-api: true -->` if this module exposes a consumable API such as HTTP/RPC routes or handlers; otherwise output `<!-- ariadne-api: false -->`. Then write the Markdown document.",
+            "- Explain the module's summary, responsibilities, operation, and organization.",
+        ]
     lines.extend(
         [
             "",
             "# Generation instructions",
-            "- Explain the module's summary, responsibilities, operation, and organization.",
+            *generation_instructions,
             "- Reference concrete files and symbols when supported by evidence.",
             "- Describe parent, child, and external relationships only when useful and established by evidence.",
             "- Avoid file-by-file paraphrase and omit irrelevant sections.",

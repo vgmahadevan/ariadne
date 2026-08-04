@@ -24,6 +24,18 @@ Generate one `*-genai-doc.md` per module in a selected subtree:
 ariadne weave [path]
 ```
 
+During a regular weave, each generated document records `ariadne.api: true` or
+`false` in its YAML metadata. To generate detailed route and parameter
+documentation only for modules marked as APIs, run:
+
+```console
+ariadne weave [path] --api
+```
+
+API documents use the separate `*-genai-api-doc.md` suffix. Run a regular weave
+first (or regenerate stale module documents) so the API selection metadata is
+available.
+
 While weaving, Ariadne writes module progress bars to stderr and keeps generated
 document paths on stdout for scripting. A weave continues after individual
 module failures and exits with status 1 after printing its complete summary.
@@ -50,6 +62,9 @@ Markdown:
 ariadne clean [path] --dry-run
 ariadne clean [path]
 ```
+
+Use `ariadne clean [path] --api` to remove only API documents. It leaves regular
+module documents intact; `--api --drafts` likewise selects only API-weave drafts.
 
 Human-reviewed or modified generated documents are retained unless
 `--include-human-modified` is supplied. `--drafts` also selects partial draft

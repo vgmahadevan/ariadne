@@ -15,6 +15,7 @@ from ariadne.weave.documents import (
     compose_document,
     persist_document,
     validate_document,
+    read_document_metadata,
 )
 from ariadne.weave.models import PlannedModule
 from ariadne.weave.planning import plan_modules
@@ -48,6 +49,16 @@ class FakeBackend:
 class FailingBackend:
     async def generate(self, request: ModelRequest) -> ModelResponse:
         raise ModelError(ModelErrorKind.CONNECTION, "endpoint could not be reached.")
+
+
+class ApiBackend(FakeBackend):
+    async def generate(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        marker = "<!-- ariadne-api: true -->\n" if len(self.requests) == 1 else ""
+        return ModelResponse(
+            marker + "# HTTP API\n\n## Routes\n\n`POST /widgets` accepts a widget.",
+            "fake-model",
+        )
 
 
 def _config(root: Path) -> Path:
@@ -344,6 +355,64 @@ def test_weave_generates_subtree_and_module_only(tmp_path: Path) -> None:
     )
     assert len(only.modules) == 1
     assert len(only_backend.requests) == 1
+
+
+def test_api_weave_selects_marked_modules_and_writes_distinct_document(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "service").mkdir()
+    (tmp_path / "service" / "routes.py").write_text(
+        '@app.post("/widgets")\ndef create_widget(): pass\n', encoding="utf-8"
+    )
+    config_path = _config(tmp_path)
+    backend = ApiBackend()
+
+    regular = asyncio.run(
+        weave_repository(
+            cwd=tmp_path, path="service", config_path=config_path,
+            git_enabled=False, module_only=True, backend=backend,
+        )
+    )
+    regular_path = regular.successful[0].output_path
+    provenance = read_document_metadata(regular_path)["ariadne"]
+    assert provenance["api"] is True
+    assert provenance["document_type"] == "module"
+    assert "ariadne-api" not in regular_path.read_text(encoding="utf-8")
+
+    api_result = asyncio.run(
+        weave_repository(
+            cwd=tmp_path, path="service", config_path=config_path,
+            git_enabled=False, module_only=True, api=True, backend=backend,
+        )
+    )
+    api_path = tmp_path / "service" / "service-genai-api-doc.md"
+    assert api_result.successful[0].output_path == api_path
+    assert api_path.is_file()
+    api_provenance = read_document_metadata(api_path)["ariadne"]
+    assert api_provenance["document_type"] == "api"
+    assert "Enumerate every supported route" in backend.requests[1].user_prompt
+
+
+def test_api_weave_is_empty_when_no_module_is_marked(tmp_path: Path) -> None:
+    (tmp_path / "library").mkdir()
+    (tmp_path / "library" / "core.py").write_text("VALUE = 1\n", encoding="utf-8")
+    config_path = _config(tmp_path)
+    backend = FakeBackend()
+    asyncio.run(
+        weave_repository(
+            cwd=tmp_path, path="library", config_path=config_path,
+            git_enabled=False, module_only=True, backend=backend,
+        )
+    )
+
+    result = asyncio.run(
+        weave_repository(
+            cwd=tmp_path, path="library", config_path=config_path,
+            git_enabled=False, module_only=True, api=True, backend=backend,
+        )
+    )
+    assert result.modules == ()
+    assert len(backend.requests) == 1
 
 
 def test_weave_model_error_is_isolated_and_retried(tmp_path: Path) -> None:

@@ -47,6 +47,7 @@ async def weave_repository(
     git_enabled: bool = True,
     file_policy: FilePolicy | None = None,
     module_only: bool = False,
+    api: bool = False,
     force: bool = False,
     resume: bool = False,
     max_concurrency: int | None = None,
@@ -97,7 +98,7 @@ async def weave_repository(
     initialize_internal_readme(inspection.context.root)
     selected_backend = backend or OpenAICompatibleBackend(config.model)
     owns_backend = backend is None
-    plans = plan_modules(inspection, config, module_only=module_only)
+    plans = plan_modules(inspection, config, module_only=module_only, api=api)
     concurrency = (
         config.generation.max_concurrency
         if max_concurrency is None
@@ -105,7 +106,7 @@ async def weave_repository(
     )
     if concurrency <= 0:
         raise GenerationError("max concurrency must be a positive integer")
-    if on_progress is not None:
+    if on_progress is not None and plans:
         on_progress(
             ProgressEvent(
                 0,
@@ -119,6 +120,7 @@ async def weave_repository(
     commit = source_commit(inspection)
     store = RunStateStore(inspection.context.root)
     fingerprint = resume_fingerprint(config)
+    fingerprint = f"{fingerprint}:{'api' if api else 'module'}"
     selection = inspection.context.selection.relative_to(
         inspection.context.root
     ).as_posix() or "."
@@ -126,6 +128,9 @@ async def weave_repository(
     if previous is not None and (
         previous.get("repository_root") != str(inspection.context.root)
         or previous.get("selection") != selection
+        or previous.get("document_type", "module") != (
+            "api" if api else "module"
+        )
     ):
         raise GenerationError(
             "--resume found no compatible latest run for this repository selection"
@@ -163,6 +168,7 @@ async def weave_repository(
         "model": config.model.model,
         "config_fingerprint": fingerprint,
         "prompt_version": PROMPT_VERSION,
+        "document_type": "api" if api else "module",
         "started_at": (previous or {}).get("started_at", started.isoformat()),
         "finished_at": None,
         "interrupted": False,
@@ -242,6 +248,7 @@ async def weave_repository(
                 entries[index], attempt, manifest, store, clock
             ),
             retrieval_inspection=retrieval_inspection,
+            api=api,
         )
 
     try:

@@ -116,6 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
     weave_parser.add_argument("--root")
     weave_parser.add_argument("--no-git", action="store_true")
     weave_parser.add_argument(
+        "--api", action="store_true",
+        help="generate API reference docs only for modules marked as exposing an API",
+    )
+    weave_parser.add_argument(
         "--module-only",
         action="store_true",
         help="generate only the selected module, not its descendants",
@@ -145,6 +149,10 @@ def build_parser() -> argparse.ArgumentParser:
     clean_parser.add_argument("--config", type=Path)
     clean_parser.add_argument("--root")
     clean_parser.add_argument("--no-git", action="store_true")
+    clean_parser.add_argument(
+        "--api", action="store_true",
+        help="remove API reference documents instead of regular module documents",
+    )
     clean_parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -188,6 +196,7 @@ def main(
                 dry_run=args.dry_run,
                 include_human_modified=args.include_human_modified,
                 include_drafts=args.drafts,
+                api=args.api,
             )
             for item in result.paths:
                 print(item)
@@ -208,6 +217,7 @@ def main(
                         git_enabled=not args.no_git,
                         file_policy=selected_policy,
                         module_only=args.module_only,
+                        api=args.api,
                         force=args.force,
                         resume=args.resume,
                         max_concurrency=args.max_concurrency,
