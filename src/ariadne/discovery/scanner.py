@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -165,6 +166,14 @@ def _early_ignore(
         return "symlink"
     if name.endswith("-genai-doc.md") or name.endswith("-genai-openapi.yaml"):
         return "generated-document"
+    if re.search(
+        r"(?i)(^test_.+_genai\.py$|_genai_test\.go$|"
+        r"\.genai\.(?:test|spec)\.(?:js|ts)$|"
+        r"genai(?:test|tests|spec)\.(?:java|kt|scala|cs|php|swift)$|"
+        r"_genai(?:_test|_spec)?\.(?:rs|rb|c|cpp|bats)$)",
+        name,
+    ):
+        return "generated-test"
     if config.use_default_ignores and name in DEFAULT_IGNORED_NAMES:
         return "default-ignore"
     if extra_defaults.match_file(match_path):

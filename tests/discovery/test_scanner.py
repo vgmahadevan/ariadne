@@ -41,6 +41,24 @@ def test_ignore_precedence_and_language_metadata(tmp_path: Path) -> None:
     }
 
 
+def test_generated_test_files_are_excluded_from_future_inspections(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "tests").mkdir()
+    generated = tmp_path / "tests" / "test_service_genai.py"
+    generated.write_text("def test_generated(): pass\n", encoding="utf-8")
+
+    result = scan_repository(
+        _context(tmp_path),
+        RepositoryConfig(file_policy=FilePolicy.ALL_NONIGNORED),
+        None,
+    )
+
+    assert ("tests/test_service_genai.py", "generated-test") in {
+        (item.path, item.reason) for item in result.ignored
+    }
+
+
 def test_git_file_policies_and_gitignore(tmp_path: Path) -> None:
     (tmp_path / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
     (tmp_path / "tracked.py").write_text("", encoding="utf-8")

@@ -39,6 +39,14 @@ def test_clean_artifact_selectors_are_explicit_and_mutually_exclusive() -> None:
         parser.parse_args(["clean", "--docs", "--openapi"])
 
 
+def test_weave_api_and_tests_modes_are_mutually_exclusive() -> None:
+    parser = build_parser()
+
+    assert parser.parse_args(["weave", "--tests"]).tests is True
+    with pytest.raises(SystemExit):
+        parser.parse_args(["weave", "--api", "--tests"])
+
+
 def test_inspect_command_defaults_to_names_only(
     tmp_path: Path, capsys
 ) -> None:

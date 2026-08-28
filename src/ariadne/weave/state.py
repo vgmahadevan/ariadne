@@ -9,7 +9,12 @@ from typing import Any
 
 from ..settings import AriadneConfig
 from .context import PROMPT_VERSION
-from .documents import ValidationError, validate_document
+from .documents import (
+    ValidationError,
+    validate_document,
+    validate_openapi_document,
+    validate_test_file,
+)
 from .models import GenerationResult, ModuleStatus, PlannedModule
 from .planning import module_id
 
@@ -224,7 +229,13 @@ def result_from_entry(root: Path, entry: dict[str, object]) -> GenerationResult:
 
 def _valid_existing_output(path: Path, config: AriadneConfig) -> bool:
     try:
-        validate_document(path.read_text(encoding="utf-8"))
+        content = path.read_text(encoding="utf-8")
+        if path.name.endswith("-genai-openapi.yaml"):
+            validate_openapi_document(content)
+        elif "genai" in path.stem.casefold() and path.suffix.casefold() != ".md":
+            validate_test_file(content)
+        else:
+            validate_document(content)
     except (OSError, UnicodeError, ValidationError):
         return False
     return True

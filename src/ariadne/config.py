@@ -73,7 +73,7 @@ corpus itself.
 - `state.json` — a generated pointer to the latest weave manifest.
 - `runs/<run-id>.json` — generated per-run plans, module outcomes, errors, and
   resume metadata.
-- `drafts/<run-id>/` — partial model output retained when Markdown validation
+- `drafts/<run-id>/` — partial model output retained when artifact validation
   fails.
 
 `ariadne clean` preserves configuration and run history. Deleting generated

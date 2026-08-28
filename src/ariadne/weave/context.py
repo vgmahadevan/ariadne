@@ -8,7 +8,7 @@ from ..llm import ModelRequest
 from ..settings import AriadneConfig, ContextConfig
 from .models import ContextFile, ModuleContext, PlannedModule
 
-PROMPT_VERSION = 3
+PROMPT_VERSION = 4
 
 
 def assemble_context(
@@ -18,6 +18,7 @@ def assemble_context(
     *,
     source_commit_value: str | None = None,
     missing_parent: bool = False,
+    tests: bool = False,
 ) -> ModuleContext:
     module = plan.module
     nodes = [
@@ -26,8 +27,20 @@ def assemble_context(
         if _within(node.path, module.physical_path)
     ]
     tree = _render_tree(nodes, module.physical_path, config.context.max_tree_depth)
+    evidence_nodes = list(nodes)
+    if tests:
+        from .tests import is_test_path
+
+        known = {node.path for node in evidence_nodes}
+        evidence_nodes.extend(
+            node
+            for node in inspection.physical_nodes
+            if node.path not in known
+            and not node.is_directory
+            and (node.is_manifest or is_test_path(node.path))
+        )
     candidates = _context_candidates(
-        inspection.context.root, nodes, plan, config
+        inspection.context.root, evidence_nodes, plan, config
     )
     files, omissions = _read_bounded_files(candidates, config.context, config)
     if missing_parent:
@@ -49,7 +62,13 @@ def assemble_context(
 
 
 def build_prompt(
-    context: ModuleContext, *, retrieval_enabled: bool = False, api: bool = False
+    context: ModuleContext,
+    *,
+    retrieval_enabled: bool = False,
+    api: bool = False,
+    tests: bool = False,
+    test_path: str | None = None,
+    test_language: str | None = None,
 ) -> ModelRequest:
     system = (
         "You are Ariadne, a disciplined technical writer documenting one logical "
@@ -60,8 +79,13 @@ def build_prompt(
         + (
             "Return only a valid OpenAPI 3.1 YAML document, without Markdown fences."
             if api
-            else "Return only final Markdown beginning with one level-one title; "
-            "do not include YAML front matter or a generation disclaimer."
+            else (
+                "Return only the complete source text for the requested new test "
+                "file, without Markdown fences or commentary."
+                if tests
+                else "Return only final Markdown beginning with one level-one title; "
+                "do not include YAML front matter or a generation disclaimer."
+            )
         )
     )
     lines = [
@@ -101,7 +125,17 @@ def build_prompt(
             "Do this only where the supplied evidence supports useful detail, "
             "and do not fall back to file-by-file paraphrase."
         ]
-    if api:
+    if tests:
+        generation_instructions = [
+            f"- Write one new {test_language or 'source-language'} unit test file at the harness-selected path `{test_path}`.",
+            "- Infer and use the repository's existing test framework, imports, naming, fixtures, assertion style, and test organization from primary evidence.",
+            "- If no framework is established, use a conventional framework for the language. Do not edit manifests or include installation commands in the file.",
+            "- Test meaningful observable behavior, boundary cases, error paths, and invariants supported by the source. Avoid trivial existence tests and implementation-detail coupling.",
+            "- Keep tests deterministic and isolated. Do not require network access, real credentials, production services, wall-clock timing, or order dependence.",
+            "- Use mocks or fakes only at genuine external boundaries. Prefer realistic values and focused assertions.",
+            "- Return only compilable test source for that exact file. Do not return a patch, filename heading, Markdown fence, or explanation.",
+        ]
+    elif api:
         generation_instructions = [
             "- Produce a complete, valid OpenAPI 3.1 specification grounded in the supplied files.",
             "- Include openapi, info (title, version, and useful description), and paths; include servers, tags, components, security, and externalDocs when evidence supports them.",
@@ -142,7 +176,7 @@ def build_prompt(
             "",
             *(
                 []
-                if api
+                if api or tests
                 else [
                     "# Documentation contract",
                     "Use a flexible selection of: Summary; Purpose and "

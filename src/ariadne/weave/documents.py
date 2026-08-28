@@ -210,6 +210,53 @@ def validate_openapi_document(document: str) -> None:
         raise ValidationError("OpenAPI provenance is missing")
 
 
+def validate_test_file(content: str) -> None:
+    if not content.strip():
+        raise ValidationError("generated test file is empty")
+    if re.search(r"^```", content, flags=re.MULTILINE):
+        raise ValidationError("generated test file contains Markdown fences")
+    if re.search(
+        r'(?i)(<tool_call\b|["\']tool_calls["\']\s*:|'
+        r'["\']tool_call_id["\']\s*:)',
+        content,
+    ):
+        raise ValidationError("generated test file contains tool protocol data")
+
+
+def persist_new_test(destination: Path, content: str) -> None:
+    """Atomically create a test without ever replacing an existing file."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise PersistenceError(f"refusing to overwrite existing test file: {destination}")
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(content.rstrip() + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        os.link(temporary, destination)
+        temporary.unlink()
+    except FileExistsError as exc:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise PersistenceError(
+            f"refusing to overwrite existing test file: {destination}"
+        ) from exc
+    except OSError as exc:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise PersistenceError(f"cannot persist generated test: {destination}") from exc
+
+
 def persist_document(
     destination: Path,
     document: str,

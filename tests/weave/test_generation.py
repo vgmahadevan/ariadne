@@ -15,18 +15,21 @@ from ariadne.weave.documents import (
     compose_document,
     compose_openapi_document,
     persist_document,
+    persist_new_test,
     validate_document,
     validate_openapi_document,
     read_document_metadata,
 )
 from ariadne.weave.models import PlannedModule
 from ariadne.weave.planning import plan_modules
+from ariadne.weave.tests import plan_test_modules
 from ariadne.weave.runner import weave_repository
 from ariadne.discovery import inspect_repository
 from ariadne.discovery.models import (
     InspectionResult,
     LogicalModule,
     RepositoryContext,
+    PhysicalNode,
 )
 from ariadne.llm import ModelError, ModelErrorKind, ModelRequest, ModelResponse
 from ariadne.settings import (
@@ -72,6 +75,17 @@ paths:
           description: Created
 """
         return ModelResponse(text, "fake-model")
+
+
+class GeneratedTestsBackend(FakeBackend):
+    async def generate(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        return ModelResponse(
+            "from service.routes import create_widget\n\n"
+            "def test_create_widget_rejects_missing_payload():\n"
+            "    assert create_widget(None) == 400\n",
+            "fake-model",
+        )
 
 
 def _config(root: Path) -> Path:
@@ -444,6 +458,127 @@ def test_openapi_validation_rejects_operations_without_responses() -> None:
     )
     with pytest.raises(ValidationError, match="requires responses"):
         validate_openapi_document(document)
+
+
+def test_test_planning_uses_existing_framework_directories_across_languages(
+    tmp_path: Path,
+) -> None:
+    python_module = LogicalModule("service", "src/service", languages=("Python",))
+    java_module = LogicalModule(
+        "widgets", "src/main/java/com/acme/widgets", languages=("Java",)
+    )
+    root = LogicalModule("repository", ".", children=(python_module, java_module))
+    inspection = InspectionResult(
+        RepositoryContext(tmp_path, tmp_path, None, False),
+        (
+            PhysicalNode("src/service/main.py", False, language="Python"),
+            PhysicalNode("tests/test_existing.py", False, language="Python"),
+            PhysicalNode(
+                "src/main/java/com/acme/widgets/Widget.java", False,
+                language="Java",
+            ),
+            PhysicalNode(
+                "src/test/java/com/acme/widgets/WidgetTest.java", False,
+                language="Java",
+            ),
+        ),
+        (),
+        root,
+    )
+
+    plans = plan_test_modules(
+        inspection, plan_modules(inspection, AriadneConfig(), module_only=False)
+    )
+
+    assert [plan.output.relative_to(tmp_path).as_posix() for plan in plans] == [
+        "tests/test_service_genai.py",
+        "src/test/java/com/acme/widgets/WidgetsGenaiTest.java",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("language", "source_name", "expected"),
+    [
+        ("TypeScript", "index.ts", "tests/component.genai.test.ts"),
+        ("Go", "main.go", "component/component_genai_test.go"),
+        ("Rust", "lib.rs", "tests/component_genai.rs"),
+        ("Ruby", "component.rb", "spec/component_genai_spec.rb"),
+        ("C#", "Component.cs", "tests/ComponentGenaiTests.cs"),
+        ("Swift", "Component.swift", "Tests/ComponentGenaiTests.swift"),
+        ("Shell", "component.sh", "tests/component_genai_test.bats"),
+    ],
+)
+def test_test_planning_has_language_specific_fallbacks(
+    tmp_path: Path, language: str, source_name: str, expected: str
+) -> None:
+    module = LogicalModule("component", "component", languages=(language,))
+    inspection = InspectionResult(
+        RepositoryContext(tmp_path, tmp_path, None, False),
+        (PhysicalNode(f"component/{source_name}", False, language=language),),
+        (),
+        module,
+    )
+
+    plans = plan_test_modules(
+        inspection, plan_modules(inspection, AriadneConfig(), module_only=True)
+    )
+
+    assert plans[0].output.relative_to(tmp_path).as_posix() == expected
+
+
+def test_test_weave_creates_new_file_without_running_or_overwriting(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "service").mkdir()
+    (tmp_path / "service" / "routes.py").write_text(
+        "def create_widget(payload):\n    return 400 if payload is None else 201\n",
+        encoding="utf-8",
+    )
+    config_path = _config(tmp_path)
+    backend = GeneratedTestsBackend()
+
+    result = asyncio.run(
+        weave_repository(
+            cwd=tmp_path, path="service", config_path=config_path,
+            git_enabled=False, module_only=True, tests=True, backend=backend,
+        )
+    )
+
+    destination = tmp_path / "tests" / "test_service_genai.py"
+    assert result.successful[0].output_path == destination
+    assert destination.read_text(encoding="utf-8").startswith("from service.routes")
+    assert "existing test framework" in backend.requests[0].user_prompt
+
+    original = destination.read_text(encoding="utf-8")
+    resumed = asyncio.run(
+        weave_repository(
+            cwd=tmp_path, path="service", config_path=config_path,
+            git_enabled=False, module_only=True, tests=True, resume=True,
+            backend=backend,
+        )
+    )
+    assert len(resumed.successful) == 1
+    assert len(backend.requests) == 1
+
+    repeated = asyncio.run(
+        weave_repository(
+            cwd=tmp_path, path="service", config_path=config_path,
+            git_enabled=False, module_only=True, tests=True, backend=backend,
+        )
+    )
+    assert repeated.summary.partial == 1
+    assert "refusing to overwrite" in (repeated.modules[0].error or "")
+    assert destination.read_text(encoding="utf-8") == original
+
+
+def test_new_test_persistence_rejects_existing_files(tmp_path: Path) -> None:
+    destination = tmp_path / "test_module_genai.py"
+    destination.write_text("# human file\n", encoding="utf-8")
+
+    with pytest.raises(PersistenceError, match="overwrite"):
+        persist_new_test(destination, "def test_generated(): pass")
+
+    assert destination.read_text(encoding="utf-8") == "# human file\n"
 
 
 def test_api_weave_is_empty_when_no_module_is_marked(tmp_path: Path) -> None:

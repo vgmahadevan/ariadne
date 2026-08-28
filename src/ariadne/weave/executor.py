@@ -22,9 +22,11 @@ from .documents import (
     compose_openapi_document,
     is_markdown_like,
     persist_document,
+    persist_new_test,
     persist_partial_draft,
     validate_document,
     validate_openapi_document,
+    validate_test_file,
     extract_api_assessment,
 )
 from .models import GenerationResult, ModuleStatus, PlannedModule
@@ -46,6 +48,8 @@ async def execute_module(
     on_attempt: Callable[[int], None],
     retrieval_inspection: InspectionResult | None = None,
     api: bool = False,
+    tests: bool = False,
+    test_language: str | None = None,
 ) -> GenerationResult:
     existed = plan.output.is_file()
     response_text: str | None = None
@@ -69,15 +73,19 @@ async def execute_module(
             )
         try:
             context = assemble_context(
-                inspection,
+                retrieval_inspection if tests and retrieval_inspection else inspection,
                 plan,
                 attempt_config,
                 source_commit_value=commit,
                 missing_parent=missing_parent,
+                tests=tests,
             )
             prompt = build_prompt(
                 context,
                 api=api,
+                tests=tests,
+                test_path=plan.output.relative_to(inspection.context.root).as_posix(),
+                test_language=test_language,
                 retrieval_enabled=(
                     config.retrieval.enabled
                     and retrieval_inspection is not None
@@ -98,7 +106,7 @@ async def execute_module(
             if response.text is None:
                 raise ModelError(
                     ModelErrorKind.INVALID_RESPONSE,
-                    f"model did not return a final {'OpenAPI' if api else 'Markdown'} document.",
+                    "model did not return a final artifact.",
                     retryable=False,
                 )
             body, has_api = (
@@ -106,7 +114,11 @@ async def execute_module(
                 if api
                 else extract_api_assessment(response.text)
             )
-            if api:
+            if tests:
+                document = body
+                validate_test_file(document)
+                persist_new_test(plan.output, document)
+            elif api:
                 document = compose_openapi_document(
                     body,
                     module=plan.module,
@@ -126,7 +138,8 @@ async def execute_module(
                     has_api=has_api,
                 )
                 validate_document(document)
-            persist_document(plan.output, document, config=config, force=force)
+            if not tests:
+                persist_document(plan.output, document, config=config, force=force)
             if not plan.output.is_file():
                 raise PersistenceError(
                     "documentation output does not exist after persistence: "
@@ -169,7 +182,9 @@ async def execute_module(
             )
         except (ValidationError, PersistenceError, OSError) as exc:
             draft_path = None
-            if response_text is not None and (api or is_markdown_like(response_text)):
+            if response_text is not None and (
+                api or tests or is_markdown_like(response_text)
+            ):
                 try:
                     draft_path = persist_partial_draft(
                         inspection.context.root,
@@ -178,7 +193,9 @@ async def execute_module(
                         response_text,
                         response_model or config.model.model,
                         clock(),
-                        document_type="openapi" if api else "module",
+                        document_type=(
+                            "test" if tests else "openapi" if api else "module"
+                        ),
                     )
                 except PersistenceError as draft_exc:
                     exc = draft_exc

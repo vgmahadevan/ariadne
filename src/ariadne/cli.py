@@ -115,9 +115,14 @@ def build_parser() -> argparse.ArgumentParser:
     weave_parser.add_argument("--config", type=Path)
     weave_parser.add_argument("--root")
     weave_parser.add_argument("--no-git", action="store_true")
-    weave_parser.add_argument(
+    weave_outputs = weave_parser.add_mutually_exclusive_group()
+    weave_outputs.add_argument(
         "--api", action="store_true",
         help="generate OpenAPI specs for top-level API boundaries",
+    )
+    weave_outputs.add_argument(
+        "--tests", action="store_true",
+        help="generate new unit test files without running them",
     )
     weave_parser.add_argument(
         "--module-only",
@@ -228,6 +233,7 @@ def main(
                         file_policy=selected_policy,
                         module_only=args.module_only,
                         api=args.api,
+                        tests=args.tests,
                         force=args.force,
                         resume=args.resume,
                         max_concurrency=args.max_concurrency,

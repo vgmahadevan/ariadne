@@ -38,6 +38,20 @@ generates one specification at the topmost connected API boundary. Separate
 API branches beneath a non-API parent remain separate specifications. Run a
 regular weave first so the API selection metadata is available.
 
+Generate new unit test files without executing repository code:
+
+```console
+ariadne weave [path] --tests
+```
+
+Ariadne chooses one deterministic test destination for each source-bearing
+logical module. It prefers the repository's existing test directories, file
+naming, language, and framework evidence. If no framework is established, the
+model is instructed to use a conventional framework for the detected language;
+Ariadne does not install dependencies or edit manifests. Generated files include
+`genai` in their names and are always created exclusively: an existing file is
+never replaced, including with `--force`. The tests are not executed.
+
 While weaving, Ariadne writes module progress bars to stderr and keeps generated
 document paths on stdout for scripting. A weave continues after individual
 module failures and exits with status 1 after printing its complete summary.

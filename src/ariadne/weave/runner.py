@@ -29,6 +29,7 @@ from .models import (
     WeaveSummary,
 )
 from .planning import module_id, parent_indices, plan_modules
+from .tests import plan_test_modules, test_language
 from .state import (
     RunStateStore,
     manifest_entry,
@@ -48,6 +49,7 @@ async def weave_repository(
     file_policy: FilePolicy | None = None,
     module_only: bool = False,
     api: bool = False,
+    tests: bool = False,
     force: bool = False,
     resume: bool = False,
     max_concurrency: int | None = None,
@@ -57,6 +59,8 @@ async def weave_repository(
     on_config_created: Callable[[Path], None] | None = None,
     on_progress: Callable[[ProgressEvent], None] | None = None,
 ) -> WeaveResult:
+    if api and tests:
+        raise GenerationError("--api and --tests cannot be used together")
     cwd = (cwd or Path.cwd()).resolve()
     config_start = Path(root).resolve() if root else cwd
     selected_config = (
@@ -99,6 +103,8 @@ async def weave_repository(
     selected_backend = backend or OpenAICompatibleBackend(config.model)
     owns_backend = backend is None
     plans = plan_modules(inspection, config, module_only=module_only, api=api)
+    if tests:
+        plans = plan_test_modules(inspection, plans)
     concurrency = (
         config.generation.max_concurrency
         if max_concurrency is None
@@ -120,7 +126,8 @@ async def weave_repository(
     commit = source_commit(inspection)
     store = RunStateStore(inspection.context.root)
     fingerprint = resume_fingerprint(config)
-    fingerprint = f"{fingerprint}:{'api' if api else 'module'}"
+    document_type = "test" if tests else "openapi" if api else "module"
+    fingerprint = f"{fingerprint}:{document_type}"
     selection = inspection.context.selection.relative_to(
         inspection.context.root
     ).as_posix() or "."
@@ -128,9 +135,7 @@ async def weave_repository(
     if previous is not None and (
         previous.get("repository_root") != str(inspection.context.root)
         or previous.get("selection") != selection
-        or previous.get("document_type", "module") != (
-            "openapi" if api else "module"
-        )
+        or previous.get("document_type", "module") != document_type
     ):
         raise GenerationError(
             "--resume found no compatible latest run for this repository selection"
@@ -168,7 +173,7 @@ async def weave_repository(
         "model": config.model.model,
         "config_fingerprint": fingerprint,
         "prompt_version": PROMPT_VERSION,
-        "document_type": "openapi" if api else "module",
+        "document_type": document_type,
         "started_at": (previous or {}).get("started_at", started.isoformat()),
         "finished_at": None,
         "interrupted": False,
@@ -249,6 +254,8 @@ async def weave_repository(
             ),
             retrieval_inspection=retrieval_inspection,
             api=api,
+            tests=tests,
+            test_language=(test_language(inspection, plans[index]) if tests else None),
         )
 
     try:
