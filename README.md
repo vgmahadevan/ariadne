@@ -25,16 +25,18 @@ ariadne weave [path]
 ```
 
 During a regular weave, each generated document records `ariadne.api: true` or
-`false` in its YAML metadata. To generate detailed route and parameter
-documentation only for modules marked as APIs, run:
+`false` in its YAML metadata. To generate OpenAPI 3.1 specifications for the
+detected API boundaries, run:
 
 ```console
 ariadne weave [path] --api
 ```
 
-API documents use the separate `*-genai-api-doc.md` suffix. Run a regular weave
-first (or regenerate stale module documents) so the API selection metadata is
-available.
+Specifications use the separate `*-genai-openapi.yaml` suffix and contain
+`x-ariadne` provenance. When nested modules are marked as API modules, Ariadne
+generates one specification at the topmost connected API boundary. Separate
+API branches beneath a non-API parent remain separate specifications. Run a
+regular weave first so the API selection metadata is available.
 
 While weaving, Ariadne writes module progress bars to stderr and keeps generated
 document paths on stdout for scripting. A weave continues after individual
@@ -63,8 +65,16 @@ ariadne clean [path] --dry-run
 ariadne clean [path]
 ```
 
-Use `ariadne clean [path] --api` to remove only API documents. It leaves regular
-module documents intact; `--api --drafts` likewise selects only API-weave drafts.
+Cleanup defaults to generated Markdown docs. Select the artifact type explicitly
+when needed:
+
+```console
+ariadne clean [path] --docs
+ariadne clean [path] --openapi
+ariadne clean [path] --all
+```
+
+These selectors also constrain partial drafts when combined with `--drafts`.
 
 Human-reviewed or modified generated documents are retained unless
 `--include-human-modified` is supplied. `--drafts` also selects partial draft

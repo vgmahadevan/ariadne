@@ -19,10 +19,12 @@ from .documents import (
     PersistenceError,
     ValidationError,
     compose_document,
+    compose_openapi_document,
     is_markdown_like,
     persist_document,
     persist_partial_draft,
     validate_document,
+    validate_openapi_document,
     extract_api_assessment,
 )
 from .models import GenerationResult, ModuleStatus, PlannedModule
@@ -96,7 +98,7 @@ async def execute_module(
             if response.text is None:
                 raise ModelError(
                     ModelErrorKind.INVALID_RESPONSE,
-                    "model did not return a final Markdown document.",
+                    f"model did not return a final {'OpenAPI' if api else 'Markdown'} document.",
                     retryable=False,
                 )
             body, has_api = (
@@ -104,17 +106,26 @@ async def execute_module(
                 if api
                 else extract_api_assessment(response.text)
             )
-            document = compose_document(
-                body,
-                config=config,
-                module=plan.module,
-                generated_at=clock(),
-                source_commit_value=commit,
-                model=response.model,
-                has_api=has_api,
-                document_type="api" if api else "module",
-            )
-            validate_document(document)
+            if api:
+                document = compose_openapi_document(
+                    body,
+                    module=plan.module,
+                    generated_at=clock(),
+                    source_commit_value=commit,
+                    model=response.model,
+                )
+                validate_openapi_document(document)
+            else:
+                document = compose_document(
+                    body,
+                    config=config,
+                    module=plan.module,
+                    generated_at=clock(),
+                    source_commit_value=commit,
+                    model=response.model,
+                    has_api=has_api,
+                )
+                validate_document(document)
             persist_document(plan.output, document, config=config, force=force)
             if not plan.output.is_file():
                 raise PersistenceError(
@@ -158,7 +169,7 @@ async def execute_module(
             )
         except (ValidationError, PersistenceError, OSError) as exc:
             draft_path = None
-            if response_text is not None and is_markdown_like(response_text):
+            if response_text is not None and (api or is_markdown_like(response_text)):
                 try:
                     draft_path = persist_partial_draft(
                         inspection.context.root,
@@ -167,7 +178,7 @@ async def execute_module(
                         response_text,
                         response_model or config.model.model,
                         clock(),
-                        document_type="api" if api else "module",
+                        document_type="openapi" if api else "module",
                     )
                 except PersistenceError as draft_exc:
                     exc = draft_exc
@@ -241,7 +252,7 @@ async def _generate_with_retrieval(
                 ConversationMessage(
                     "user",
                     "Retrieval has ended. Using only the evidence already supplied, "
-                    "return the best-effort final Markdown document now. Do not emit "
+                    "return the best-effort final requested document now. Do not emit "
                     "tool calls or tool protocol data.",
                 )
             )

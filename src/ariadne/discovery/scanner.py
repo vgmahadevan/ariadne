@@ -163,7 +163,7 @@ def _early_ignore(
 ) -> str | None:
     if is_symlink:
         return "symlink"
-    if name.endswith("-genai-doc.md") or name.endswith("-genai-api-doc.md"):
+    if name.endswith("-genai-doc.md") or name.endswith("-genai-openapi.yaml"):
         return "generated-document"
     if config.use_default_ignores and name in DEFAULT_IGNORED_NAMES:
         return "default-ignore"

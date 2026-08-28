@@ -129,7 +129,7 @@ async def weave_repository(
         previous.get("repository_root") != str(inspection.context.root)
         or previous.get("selection") != selection
         or previous.get("document_type", "module") != (
-            "api" if api else "module"
+            "openapi" if api else "module"
         )
     ):
         raise GenerationError(
@@ -168,7 +168,7 @@ async def weave_repository(
         "model": config.model.model,
         "config_fingerprint": fingerprint,
         "prompt_version": PROMPT_VERSION,
-        "document_type": "api" if api else "module",
+        "document_type": "openapi" if api else "module",
         "started_at": (previous or {}).get("started_at", started.isoformat()),
         "finished_at": None,
         "interrupted": False,

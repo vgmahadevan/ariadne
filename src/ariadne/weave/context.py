@@ -56,8 +56,13 @@ def build_prompt(
         "module. Ground claims in the supplied primary evidence. Human documentation "
         "is secondary evidence. Prior AI-generated documentation is unverified, may "
         "be stale, and must never override source evidence. Do not repeat unsupported "
-        "claims. Acknowledge uncertainty. Return only final Markdown beginning with "
-        "one level-one title; do not include YAML front matter or a generation disclaimer."
+        "claims. Acknowledge uncertainty. "
+        + (
+            "Return only a valid OpenAPI 3.1 YAML document, without Markdown fences."
+            if api
+            else "Return only final Markdown beginning with one level-one title; "
+            "do not include YAML front matter or a generation disclaimer."
+        )
     )
     lines = [
         "# Documentation task",
@@ -98,11 +103,13 @@ def build_prompt(
         ]
     if api:
         generation_instructions = [
-            "- Produce detailed API reference documentation grounded in the supplied files.",
-            "- Enumerate every supported route, including HTTP method and path.",
-            "- For each route document path, query, header, cookie, and body parameters; request and response schemas; status codes; authentication; validation; and concrete examples when supported.",
-            "- Explain shared middleware, versioning, error formats, and route registration where supported.",
-            "- Explicitly identify details that cannot be established from the evidence.",
+            "- Produce a complete, valid OpenAPI 3.1 specification grounded in the supplied files.",
+            "- Include openapi, info (title, version, and useful description), and paths; include servers, tags, components, security, and externalDocs when evidence supports them.",
+            "- Enumerate every supported HTTP route with its method, operationId, summary, parameters, requestBody, responses, content types, schemas, status codes, authentication, and examples when supported.",
+            "- Put reusable schemas, parameters, responses, request bodies, and security schemes under components and reference them with valid $ref values.",
+            "- Every operation must define at least one response. Every path parameter must be required. Use valid OpenAPI Schema Objects.",
+            "- Do not invent routes, fields, status codes, authentication, servers, or examples. Express only evidence-backed details.",
+            "- Return YAML only, with no commentary, Markdown fence, provenance, or AI disclaimer; Ariadne adds provenance after validation.",
         ]
     else:
         generation_instructions = [
@@ -133,15 +140,23 @@ def build_prompt(
             "- Similarly, do not spend much time on facts that are implicitly obvious (e.g., a function called 'add_two_numbers()' adds two numbers)",
             *leaf_guidance,
             "",
-            "# Documentation contract",
-            "Use a flexible selection of: Summary; Purpose and Responsibilities; "
-            "How It Works; Architecture and Organization; Important Files and APIs; "
-            "Data Flow; Dependencies and Relationships; Configuration and External "
-            "Interfaces; Uncertainties and Review Notes; Areas for Improvement.",
-            "Use whichever sections fit the evidence; useful ad hoc sections are allowed.",
-            "Include Areas for Improvement only for concrete, significant problems "
-            "such as unintended duplication or critical issues. Be concise and do "
-            "not turn it into a TODO inventory.",
+            *(
+                []
+                if api
+                else [
+                    "# Documentation contract",
+                    "Use a flexible selection of: Summary; Purpose and "
+                    "Responsibilities; How It Works; Architecture and Organization; "
+                    "Important Files and APIs; Data Flow; Dependencies and "
+                    "Relationships; Configuration and External Interfaces; "
+                    "Uncertainties and Review Notes; Areas for Improvement.",
+                    "Use whichever sections fit the evidence; useful ad hoc sections "
+                    "are allowed.",
+                    "Include Areas for Improvement only for concrete, significant "
+                    "problems such as unintended duplication or critical issues. Be "
+                    "concise and do not turn it into a TODO inventory.",
+                ]
+            ),
         ]
     )
     return ModelRequest(system, "\n".join(lines))

@@ -1,7 +1,9 @@
 import io
 from pathlib import Path
 
-from ariadne.cli import _ProgressBar, main
+import pytest
+
+from ariadne.cli import _ProgressBar, build_parser, main
 from ariadne.weave.models import ProgressEvent
 from ariadne.llm import ModelResponse
 from ariadne.discovery.models import LogicalModule
@@ -24,6 +26,17 @@ def test_bare_command_prints_usage_without_error(capsys) -> None:
     assert status == 0, captured.err
     assert captured.out == "usage: ariadne [-h] {inspect,weave,clean} ...\n"
     assert captured.err == ""
+
+
+def test_clean_artifact_selectors_are_explicit_and_mutually_exclusive() -> None:
+    parser = build_parser()
+
+    assert parser.parse_args(["clean"]).artifact_type == "docs"
+    assert parser.parse_args(["clean", "--docs"]).artifact_type == "docs"
+    assert parser.parse_args(["clean", "--openapi"]).artifact_type == "openapi"
+    assert parser.parse_args(["clean", "--all"]).artifact_type == "all"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["clean", "--docs", "--openapi"])
 
 
 def test_inspect_command_defaults_to_names_only(

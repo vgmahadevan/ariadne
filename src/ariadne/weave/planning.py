@@ -7,7 +7,7 @@ from pathlib import Path
 from ..discovery.models import InspectionResult, LogicalModule
 from ..settings import AriadneConfig
 from .models import GenerationError, PlannedModule
-API_OUTPUT_SUFFIX = "-genai-api-doc.md"
+OPENAPI_OUTPUT_SUFFIX = "-genai-openapi.yaml"
 
 
 def plan_modules(
@@ -59,10 +59,18 @@ def plan_modules(
     if api:
         from .documents import read_document_metadata
 
-        selected: list[PlannedModule] = []
+        marked_outputs: set[Path] = set()
         for plan in plans:
             provenance = read_document_metadata(plan.output).get("ariadne")
-            if not isinstance(provenance, dict) or provenance.get("api") is not True:
+            if isinstance(provenance, dict) and provenance.get("api") is True:
+                marked_outputs.add(plan.output)
+        selected: list[PlannedModule] = []
+        for plan in plans:
+            if plan.output not in marked_outputs:
+                continue
+            # A connected group of API-marked modules describes one API. Generate
+            # its specification at the highest marked boundary, not at every level.
+            if plan.parent_output in marked_outputs:
                 continue
             selected.append(
                 PlannedModule(
@@ -71,7 +79,7 @@ def plan_modules(
                     None,
                     plan.output.with_name(
                         f"{plan.output.name[:-len(config.generation.output_suffix)]}"
-                        f"{API_OUTPUT_SUFFIX}"
+                        f"{OPENAPI_OUTPUT_SUFFIX}"
                     ),
                 )
             )

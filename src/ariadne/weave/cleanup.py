@@ -6,6 +6,9 @@ from pathlib import Path
 from ..config import discover_config, load_config
 from ..discovery import inspect_repository
 from .documents import read_document_metadata
+from .planning import OPENAPI_OUTPUT_SUFFIX
+
+_CLEAN_TYPES = {"docs", "openapi", "all"}
 
 
 @dataclass(frozen=True)
@@ -28,8 +31,10 @@ def clean_repository(
     dry_run: bool = False,
     include_human_modified: bool = False,
     include_drafts: bool = False,
-    api: bool = False,
+    artifact_type: str = "docs",
 ) -> CleanResult:
+    if artifact_type not in _CLEAN_TYPES:
+        raise ValueError(f"unknown clean artifact type: {artifact_type}")
     cwd = (cwd or Path.cwd()).resolve()
     config_start = Path(root).resolve() if root else cwd
     selected_config = (
@@ -46,22 +51,31 @@ def clean_repository(
     repository_root = inspection.context.root.resolve()
     selection = inspection.context.selection.resolve()
 
-    documents = tuple(
-        candidate
-        for candidate in _document_candidates(
-            repository_root,
-            selection,
-            "-genai-api-doc.md" if api else config.generation.output_suffix,
-            include_human_modified=include_human_modified,
-        )
-    )
+    suffixes = {
+        "docs": (config.generation.output_suffix,),
+        "openapi": (OPENAPI_OUTPUT_SUFFIX,),
+        "all": (config.generation.output_suffix, OPENAPI_OUTPUT_SUFFIX),
+    }[artifact_type]
+    documents = tuple(sorted(
+        (
+            candidate
+            for suffix in suffixes
+            for candidate in _document_candidates(
+                repository_root,
+                selection,
+                suffix,
+                include_human_modified=include_human_modified,
+            )
+        ),
+        key=lambda item: item.relative_to(repository_root).as_posix(),
+    ))
     drafts = (
         tuple(
             _draft_candidates(
                 repository_root,
                 selection,
                 include_human_modified=include_human_modified,
-                api=api,
+                artifact_type=artifact_type,
             )
         )
         if include_drafts
@@ -103,7 +117,7 @@ def _draft_candidates(
     selection: Path,
     *,
     include_human_modified: bool,
-    api: bool,
+    artifact_type: str,
 ) -> list[Path]:
     draft_root = repository_root / ".ariadne" / "drafts"
     if not draft_root.is_dir():
@@ -120,7 +134,10 @@ def _draft_candidates(
         if not isinstance(provenance, dict):
             continue
         document_type = provenance.get("document_type", "module")
-        if (document_type == "api") is not api:
+        is_openapi = document_type == "openapi"
+        if artifact_type == "docs" and is_openapi:
+            continue
+        if artifact_type == "openapi" and not is_openapi:
             continue
         logical_module = provenance.get("logical_module")
         if not isinstance(logical_module, str) or not _logical_within(

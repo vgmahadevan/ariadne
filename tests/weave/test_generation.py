@@ -13,8 +13,10 @@ from ariadne.weave.documents import (
     PersistenceError,
     ValidationError,
     compose_document,
+    compose_openapi_document,
     persist_document,
     validate_document,
+    validate_openapi_document,
     read_document_metadata,
 )
 from ariadne.weave.models import PlannedModule
@@ -54,11 +56,22 @@ class FailingBackend:
 class ApiBackend(FakeBackend):
     async def generate(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
-        marker = "<!-- ariadne-api: true -->\n" if len(self.requests) == 1 else ""
-        return ModelResponse(
-            marker + "# HTTP API\n\n## Routes\n\n`POST /widgets` accepts a widget.",
-            "fake-model",
-        )
+        if len(self.requests) == 1:
+            text = "<!-- ariadne-api: true -->\n# HTTP API\n\n`POST /widgets`."
+        else:
+            text = """openapi: 3.1.0
+info:
+  title: Widget API
+  version: 1.0.0
+paths:
+  /widgets:
+    post:
+      operationId: createWidget
+      responses:
+        '201':
+          description: Created
+"""
+        return ModelResponse(text, "fake-model")
 
 
 def _config(root: Path) -> Path:
@@ -385,12 +398,52 @@ def test_api_weave_selects_marked_modules_and_writes_distinct_document(
             git_enabled=False, module_only=True, api=True, backend=backend,
         )
     )
-    api_path = tmp_path / "service" / "service-genai-api-doc.md"
+    api_path = tmp_path / "service" / "service-genai-openapi.yaml"
     assert api_result.successful[0].output_path == api_path
     assert api_path.is_file()
     api_provenance = read_document_metadata(api_path)["ariadne"]
-    assert api_provenance["document_type"] == "api"
-    assert "Enumerate every supported route" in backend.requests[1].user_prompt
+    assert api_provenance["document_type"] == "openapi"
+    assert "complete, valid OpenAPI 3.1" in backend.requests[1].user_prompt
+    validate_openapi_document(api_path.read_text(encoding="utf-8"))
+
+
+def test_api_planning_selects_topmost_connected_boundaries(tmp_path: Path) -> None:
+    nested = LogicalModule("routes", "service/routes")
+    service = LogicalModule("service", "service", children=(nested,))
+    other = LogicalModule("other", "other")
+    root = LogicalModule("repository", ".", children=(service, other))
+    inspection = InspectionResult(
+        RepositoryContext(tmp_path, tmp_path, None, False), (), (), root
+    )
+    config = AriadneConfig()
+    for plan in plan_modules(inspection, config, module_only=False):
+        if plan.module.physical_path in {"service", "service/routes", "other"}:
+            plan.output.parent.mkdir(parents=True, exist_ok=True)
+            plan.output.write_text(
+                compose_document(
+                    "# API\n", config=config, module=plan.module,
+                    generated_at=datetime.now(timezone.utc), source_commit_value=None,
+                    model="fake", has_api=True,
+                ),
+                encoding="utf-8",
+            )
+
+    api_plans = plan_modules(inspection, config, module_only=False, api=True)
+
+    assert [plan.module.physical_path for plan in api_plans] == ["service", "other"]
+    assert all(plan.output.name.endswith("-genai-openapi.yaml") for plan in api_plans)
+
+
+def test_openapi_validation_rejects_operations_without_responses() -> None:
+    document = compose_openapi_document(
+        "openapi: 3.1.0\ninfo:\n  title: API\n  version: 1.0.0\npaths:\n  /items:\n    get: {}\n",
+        module=LogicalModule("api", "api"),
+        generated_at=datetime.now(timezone.utc),
+        source_commit_value=None,
+        model="fake",
+    )
+    with pytest.raises(ValidationError, match="requires responses"):
+        validate_openapi_document(document)
 
 
 def test_api_weave_is_empty_when_no_module_is_marked(tmp_path: Path) -> None:

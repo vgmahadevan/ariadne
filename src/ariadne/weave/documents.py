@@ -66,6 +66,40 @@ def compose_document(
     return "\n\n".join(parts) + "\n"
 
 
+def compose_openapi_document(
+    draft: str,
+    *,
+    module: LogicalModule,
+    generated_at: datetime,
+    source_commit_value: str | None,
+    model: str,
+) -> str:
+    """Normalize a model response and attach OpenAPI-compatible provenance."""
+    body = draft.strip()
+    fenced = re.fullmatch(r"```(?:ya?ml|json)?\s*\n(.*)\n```", body, re.DOTALL)
+    if fenced:
+        body = fenced.group(1)
+    try:
+        parsed = yaml.safe_load(body)
+    except yaml.YAMLError as exc:
+        raise ValidationError("generated OpenAPI document is invalid YAML") from exc
+    if not isinstance(parsed, dict):
+        raise ValidationError("generated OpenAPI document must be a mapping")
+    parsed["x-ariadne"] = {
+        "generated": True,
+        "generated_at": generated_at.isoformat(),
+        "tool_version": tool_version(),
+        "model": model,
+        "source_commit": source_commit_value,
+        "logical_module": module.physical_path,
+        "status": "AI-GENERATED",
+        "human_reviewed": False,
+        "human_modified": False,
+        "document_type": "openapi",
+    }
+    return yaml.safe_dump(parsed, sort_keys=False, allow_unicode=True)
+
+
 _API_MARKER = re.compile(
     r"^\s*<!--\s*ariadne-api:\s*(true|false)\s*-->\s*", re.IGNORECASE
 )
@@ -118,6 +152,62 @@ def validate_document(document: str) -> None:
     titles = re.findall(r"^# (.+)$", remainder, flags=re.MULTILINE)
     if len(titles) != 1 or not titles[0].strip():
         raise ValidationError("document must contain exactly one level-one title")
+
+
+def validate_openapi_document(document: str) -> None:
+    try:
+        spec = yaml.safe_load(document)
+    except yaml.YAMLError as exc:
+        raise ValidationError("generated OpenAPI document is invalid YAML") from exc
+    if not isinstance(spec, dict):
+        raise ValidationError("generated OpenAPI document must be a mapping")
+    version = spec.get("openapi")
+    if not isinstance(version, str) or not version.startswith("3."):
+        raise ValidationError("OpenAPI document requires an OpenAPI 3.x version")
+    info = spec.get("info")
+    if not isinstance(info, dict):
+        raise ValidationError("OpenAPI document requires an info object")
+    for key in ("title", "version"):
+        if not isinstance(info.get(key), str) or not info[key].strip():
+            raise ValidationError(f"OpenAPI info requires a non-empty {key}")
+    paths = spec.get("paths")
+    if not isinstance(paths, dict) or not paths:
+        raise ValidationError("OpenAPI document requires a non-empty paths object")
+    operations = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+    for path, path_item in paths.items():
+        if not isinstance(path, str) or not path.startswith("/"):
+            raise ValidationError("OpenAPI path keys must begin with /")
+        if not isinstance(path_item, dict):
+            raise ValidationError(f"OpenAPI path item {path} must be an object")
+        for method, operation in path_item.items():
+            if method.casefold() not in operations:
+                continue
+            if not isinstance(operation, dict):
+                raise ValidationError(
+                    f"OpenAPI operation {method.upper()} {path} must be an object"
+                )
+            responses = operation.get("responses")
+            if not isinstance(responses, dict) or not responses:
+                raise ValidationError(
+                    f"OpenAPI operation {method.upper()} {path} requires responses"
+                )
+            for status, response in responses.items():
+                if not isinstance(status, (str, int)):
+                    raise ValidationError(
+                        "OpenAPI response keys must be status codes or default"
+                    )
+                if not isinstance(response, dict) or not (
+                    isinstance(response.get("description"), str)
+                    and response["description"].strip()
+                    or isinstance(response.get("$ref"), str)
+                ):
+                    raise ValidationError(
+                        f"OpenAPI response {status} for {method.upper()} {path} "
+                        "requires a description or $ref"
+                    )
+    provenance = spec.get("x-ariadne")
+    if not isinstance(provenance, dict) or provenance.get("generated") is not True:
+        raise ValidationError("OpenAPI provenance is missing")
 
 
 def persist_document(
@@ -202,6 +292,11 @@ def persist_partial_draft(
 def read_document_metadata(path: Path) -> dict[str, object]:
     try:
         text = path.read_text(encoding="utf-8")
+        if path.suffix.casefold() in {".yaml", ".yml", ".json"}:
+            parsed = yaml.safe_load(text)
+            if isinstance(parsed, dict) and isinstance(parsed.get("x-ariadne"), dict):
+                return {"ariadne": parsed["x-ariadne"]}
+            return {}
         if not text.startswith("---\n"):
             return {}
         end = text.find("\n---\n", 4)

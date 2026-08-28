@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ariadne.weave.cleanup import clean_repository
-from ariadne.weave.documents import compose_document
+from ariadne.weave.documents import compose_document, compose_openapi_document
 from ariadne.discovery.models import LogicalModule
 from ariadne.settings import AriadneConfig
 
@@ -116,14 +116,54 @@ def test_clean_drafts_requires_draft_provenance_and_respects_subtree(
 def test_api_clean_is_independent_from_regular_documents(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     regular = tmp_path / "src" / "src-genai-doc.md"
-    api = tmp_path / "src" / "src-genai-api-doc.md"
+    api = tmp_path / "src" / "src-genai-openapi.yaml"
     regular.write_text(_generated("src"), encoding="utf-8")
-    api.write_text(_generated("src"), encoding="utf-8")
+    api.write_text(
+        compose_openapi_document(
+            "openapi: 3.1.0\ninfo:\n  title: API\n  version: 1.0.0\npaths: {}\n",
+            module=LogicalModule("src", "src"),
+            generated_at=datetime.now(timezone.utc), source_commit_value=None,
+            model="fake",
+        ),
+        encoding="utf-8",
+    )
 
     result = clean_repository(
-        cwd=tmp_path, root=str(tmp_path), path="src", git_enabled=False, api=True
+        cwd=tmp_path, root=str(tmp_path), path="src", git_enabled=False,
+        artifact_type="openapi",
     )
 
     assert result.documents == (api,)
     assert not api.exists()
     assert regular.exists()
+
+    result = clean_repository(
+        cwd=tmp_path, root=str(tmp_path), path="src", git_enabled=False,
+        artifact_type="all",
+    )
+    assert result.documents == (regular,)
+    assert not regular.exists()
+
+
+def test_clean_all_selects_docs_and_openapi_together(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    regular = tmp_path / "src" / "src-genai-doc.md"
+    openapi = tmp_path / "src" / "src-genai-openapi.yaml"
+    regular.write_text(_generated("src"), encoding="utf-8")
+    openapi.write_text(
+        compose_openapi_document(
+            "openapi: 3.1.0\ninfo:\n  title: API\n  version: 1.0.0\npaths:\n  /health:\n    get:\n      responses:\n        '200':\n          description: Healthy\n",
+            module=LogicalModule("src", "src"),
+            generated_at=datetime.now(timezone.utc), source_commit_value=None,
+            model="fake",
+        ), encoding="utf-8",
+    )
+
+    result = clean_repository(
+        cwd=tmp_path, root=str(tmp_path), path="src", git_enabled=False,
+        artifact_type="all",
+    )
+
+    assert result.documents == (regular, openapi)
+    assert not regular.exists()
+    assert not openapi.exists()

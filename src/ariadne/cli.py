@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     weave_parser.add_argument("--no-git", action="store_true")
     weave_parser.add_argument(
         "--api", action="store_true",
-        help="generate API reference docs only for modules marked as exposing an API",
+        help="generate OpenAPI specs for top-level API boundaries",
     )
     weave_parser.add_argument(
         "--module-only",
@@ -149,10 +149,20 @@ def build_parser() -> argparse.ArgumentParser:
     clean_parser.add_argument("--config", type=Path)
     clean_parser.add_argument("--root")
     clean_parser.add_argument("--no-git", action="store_true")
-    clean_parser.add_argument(
-        "--api", action="store_true",
-        help="remove API reference documents instead of regular module documents",
+    clean_types = clean_parser.add_mutually_exclusive_group()
+    clean_types.add_argument(
+        "--docs", action="store_const", const="docs", dest="artifact_type",
+        help="remove generated Markdown documentation (default)",
     )
+    clean_types.add_argument(
+        "--openapi", action="store_const", const="openapi", dest="artifact_type",
+        help="remove generated OpenAPI specifications",
+    )
+    clean_types.add_argument(
+        "--all", action="store_const", const="all", dest="artifact_type",
+        help="remove generated Markdown and OpenAPI artifacts",
+    )
+    clean_parser.set_defaults(artifact_type="docs")
     clean_parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -196,7 +206,7 @@ def main(
                 dry_run=args.dry_run,
                 include_human_modified=args.include_human_modified,
                 include_drafts=args.drafts,
-                api=args.api,
+                artifact_type=args.artifact_type,
             )
             for item in result.paths:
                 print(item)
